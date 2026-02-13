@@ -9,7 +9,7 @@ install_deps(){
 apt-get update -y >/dev/null 2>&1 || true
 apt-get install -y curl python3 python3-pip cron >/dev/null 2>&1 || true
 systemctl enable --now cron >/dev/null 2>&1 || true
-python3 -m pip install -q jdatetime >/dev/null 2>&1
+python3 -m pip install -q jdatetime >/dev/null 2>&1 || true
 }
 
 save_conf(){
@@ -50,10 +50,19 @@ PY
 
 cmd_install(){
 install_deps
-read -p "Telegram Bot Token: " TOKEN </dev/tty
-read -p "Telegram Chat ID: " CHAT_ID </dev/tty
-read -p "SOCKS5 Proxy (optional): " PROXY </dev/tty
-read -p "Backup interval (minutes): " INTERVAL_MINUTES </dev/tty
+
+echo "Telegram Bot Token:"
+read TOKEN
+
+echo "Telegram Chat ID:"
+read CHAT_ID
+
+echo "SOCKS5 Proxy (optional, leave empty if none):"
+read PROXY
+
+echo "Backup interval (minutes):"
+read INTERVAL_MINUTES
+
 save_conf
 setup_cron
 echo "Installed successfully ✅"
