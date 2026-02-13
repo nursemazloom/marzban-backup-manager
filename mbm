@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 set -e
 
-# Colors
+# ===== Paths (NO cwd dependency) =====
+APP_DIR="/opt/marzban-backup"
+CONF="$APP_DIR/config.conf"
+CRON_TAG="# mbm-backup"
+REPO_RAW_BASE="https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main"
+
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+# ===== Version (prefer installed version file) =====
+VERSION_FILE="$APP_DIR/VERSION"
+VERSION="$(
+  cat "$VERSION_FILE" 2>/dev/null || \
+  cat "$SCRIPT_DIR/VERSION" 2>/dev/null || \
+  echo "0.0.0"
+)"
+
+# ===== Colors =====
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'
 MAG='\033[0;35m'; WHT='\033[1;37m'; NC='\033[0m'
 say(){ echo -e "${CYN}➜${NC} $*"; }
@@ -9,20 +26,25 @@ ok(){ echo -e "${GRN}✔${NC} $*"; }
 warn(){ echo -e "${YLW}⚠${NC} $*"; }
 err(){ echo -e "${RED}✖${NC} $*"; }
 
-APP_DIR="/opt/marzban-backup"
-CONF="$APP_DIR/config.conf"
-CRON_TAG="# mbm-backup"
+# ===== marzban binary (robust) =====
+MARZBAN_BIN="$(command -v marzban 2>/dev/null || true)"
+[ -z "$MARZBAN_BIN" ] && [ -x /usr/local/bin/marzban ] && MARZBAN_BIN="/usr/local/bin/marzban"
+[ -z "$MARZBAN_BIN" ] && [ -x /usr/bin/marzban ] && MARZBAN_BIN="/usr/bin/marzban"
 
 help(){
 echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${WHT}Marzban Backup Manager (mbm)${NC}"
+echo -e "${WHT}Marzban Backup Manager (mbm)${NC}  ${YLW}v${VERSION}${NC}"
 echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${CYN}Usage:${NC}"
-echo -e "  ${WHT}mbm install${NC}     Setup Telegram + Proxy + Schedule (and run first backup)"
-echo -e "  ${WHT}mbm backup${NC}      Create backup now and send to Telegram"
-echo -e "  ${WHT}mbm restore <file>${NC}  Restore a backup tar.gz and restart marzban"
-echo -e "  ${WHT}mbm uninstall${NC}   Remove mbm + cron + config"
-echo -e "  ${WHT}mbm help${NC}        Show this help"
+echo -e "${CYN}Usage:${NC}  mbm <command>\n"
+echo -e "${YLW}Commands:${NC}"
+echo -e "  ${WHT}install${NC}        Setup Telegram + Proxy + Schedule (runs first backup)"
+echo -e "  ${WHT}backup${NC}         Create backup now and send to Telegram"
+echo -e "  ${WHT}restore <file>${NC} Restore backup tar.gz and restart marzban"
+echo -e "  ${WHT}status${NC}         Show mbm + cron + last backup status"
+echo -e "  ${WHT}version${NC}        Show version"
+echo -e "  ${WHT}update${NC}         Update mbm from GitHub (keeps config)"
+echo -e "  ${WHT}uninstall${NC}      Remove mbm + cron + config"
+echo -e "  ${WHT}help${NC}           Show this help"
 echo
 echo -e "${YLW}Proxy formats (optional):${NC}"
 echo -e "  socks5h://127.0.0.1:1080   (recommended for Iran)"
@@ -34,25 +56,19 @@ echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━�
 install_deps(){
 say "Installing dependencies..."
 export DEBIAN_FRONTEND=noninteractive
-
 apt-get update -y >/dev/null 2>&1 || true
 apt-get install -y curl cron python3 python3-pip >/dev/null 2>&1 || true
 systemctl enable --now cron >/dev/null 2>&1 || true
 
-# jdatetime: try apt first, then pip fallback
 if python3 -c "import jdatetime" >/dev/null 2>&1; then
-  ok "Python module jdatetime is available"
-  return
+  ok "Python module jdatetime is available"; return
 fi
 
 apt-get install -y python3-jdatetime >/dev/null 2>&1 || true
-
 if python3 -c "import jdatetime" >/dev/null 2>&1; then
-  ok "Installed jdatetime via apt"
-  return
+  ok "Installed jdatetime via apt"; return
 fi
 
-# pip fallback (handles Debian/Ubuntu externally-managed)
 python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
 python3 -m pip install -q jdatetime --break-system-packages >/dev/null 2>&1 || \
 python3 -m pip install -q --user jdatetime >/dev/null 2>&1 || true
@@ -61,10 +77,8 @@ python3 -c "import jdatetime" >/dev/null 2>&1 && ok "Installed jdatetime via pip
 }
 
 ensure_deps(){
-# Make backup reliable even if user never ran install (but still needs config)
-if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
-  install_deps
-fi
+command -v curl >/dev/null 2>&1 || install_deps
+command -v python3 >/dev/null 2>&1 || install_deps
 python3 -c "import jdatetime" >/dev/null 2>&1 || install_deps
 }
 
@@ -87,40 +101,18 @@ source "$CONF"
 
 cron_expr_from_minutes(){
 M="$1"
-if ! [[ "$M" =~ ^[0-9]+$ ]] || [ "$M" -lt 1 ]; then
-  echo ""
-  return
-fi
+if ! [[ "$M" =~ ^[0-9]+$ ]] || [ "$M" -lt 1 ]; then echo ""; return; fi
+if [ "$M" -lt 60 ]; then echo "*/$M * * * *"; return; fi
 
-if [ "$M" -lt 60 ]; then
-  echo "*/$M * * * *"
-  return
-fi
-
-H=$(( M / 60 ))
-R=$(( M % 60 ))
-
-if [ "$H" -ge 24 ] && [ "$R" -eq 0 ]; then
-  echo "0 0 */$((H/24)) * *"
-  return
-fi
-
-if [ "$H" -ge 24 ] && [ "$R" -ne 0 ]; then
-  echo "*/$R 0 */$((H/24)) * *"
-  return
-fi
-
-if [ "$R" -eq 0 ]; then
-  echo "0 */$H * * *"
-else
-  echo "*/$R */$H * * *"
-fi
+H=$(( M / 60 )); R=$(( M % 60 ))
+if [ "$H" -ge 24 ] && [ "$R" -eq 0 ]; then echo "0 0 */$((H/24)) * *"; return; fi
+if [ "$H" -ge 24 ] && [ "$R" -ne 0 ]; then echo "*/$R 0 */$((H/24)) * *"; return; fi
+if [ "$R" -eq 0 ]; then echo "0 */$H * * *"; else echo "*/$R */$H * * *"; fi
 }
 
 setup_cron(){
 expr="$(cron_expr_from_minutes "$INTERVAL_MINUTES")"
-[ -n "$expr" ] || { err "Invalid interval. Enter a number of minutes (>=1)."; exit 1; }
-
+[ -n "$expr" ] || { err "Invalid interval. Enter minutes >= 1"; exit 1; }
 crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
 (crontab -l 2>/dev/null; echo "$expr /usr/local/bin/mbm backup >/dev/null 2>&1 $CRON_TAG") | crontab -
 ok "Cron set: $expr"
@@ -133,7 +125,6 @@ import jdatetime
 print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-%d_%H-%M-%S"))
 PY
 }
-
 jalali_human(){
 python3 - <<PY
 from datetime import datetime
@@ -152,21 +143,14 @@ while true; do
   echo
   echo -e "${WHT}SOCKS5 Proxy (optional)${NC}"
   echo "Formats:"
-  echo "  socks5h://127.0.0.1:1080   (recommended for Iran - DNS via proxy)"
+  echo "  socks5h://127.0.0.1:1080"
   echo "  socks5://127.0.0.1:1080"
-  echo "Tip: you can also enter just: 127.0.0.1:1080"
+  echo "  127.0.0.1:1080"
   echo "Leave empty if not needed:"
   read INPUT
 
-  if [ -z "$INPUT" ]; then
-    PROXY=""
-    return
-  fi
-
-  if [[ "$INPUT" =~ ^http ]]; then
-    err "Invalid format. Only socks5/socks5h supported."
-    continue
-  fi
+  if [ -z "$INPUT" ]; then PROXY=""; return; fi
+  if [[ "$INPUT" =~ ^http ]]; then err "Invalid format (only socks5/socks5h)"; continue; fi
 
   base=""
   if [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
@@ -176,50 +160,76 @@ while true; do
   elif [[ "$INPUT" =~ ^socks5:// ]]; then
     base="${INPUT#socks5://}"
   else
-    err "Invalid format."
-    continue
+    err "Invalid format."; continue
   fi
 
-  c1="socks5h://$base"
-  c2="socks5://$base"
-
+  c1="socks5h://$base"; c2="socks5://$base"
   say "Testing proxy (1/2): $c1"
-  if proxy_try "$c1"; then
-    ok "Proxy OK. Using: $c1"
-    PROXY="$c1"
-    return
-  fi
-
+  if proxy_try "$c1"; then ok "Proxy OK. Using: $c1"; PROXY="$c1"; return; fi
   say "Testing proxy (2/2): $c2"
-  if proxy_try "$c2"; then
-    ok "Proxy OK. Using: $c2"
-    PROXY="$c2"
-    return
-  fi
-
-  err "Proxy failed with both socks5h and socks5. Try again."
+  if proxy_try "$c2"; then ok "Proxy OK. Using: $c2"; PROXY="$c2"; return; fi
+  err "Proxy failed (both). Try again."
 done
+}
+
+cmd_version(){ echo -e "${WHT}mbm${NC} ${YLW}v${VERSION}${NC}"; }
+
+cmd_status(){
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHT}MBM Status${NC}  ${YLW}v${VERSION}${NC}"
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+[ -x /usr/local/bin/mbm ] && ok "Binary: /usr/local/bin/mbm" || err "Binary not found"
+[ -f "$CONF" ] && ok "Config: $CONF" || warn "Config: missing (run mbm install)"
+
+if crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
+  ok "Cron: active"
+  crontab -l 2>/dev/null | grep "$CRON_TAG" || true
+else
+  warn "Cron: not set"
+fi
+
+DIR="/opt/marzban/backup"
+echo -e "${CYN}Backup dir:${NC} $DIR"
+LAST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
+[ -n "$LAST" ] && ok "Last backup: $LAST" || warn "Last backup: none"
+
+if [ -f "$CONF" ]; then
+  load_conf
+  if [ -n "${PROXY:-}" ]; then
+    echo -e "${CYN}Proxy:${NC} $PROXY"
+    proxy_try "$PROXY" && ok "Proxy test: OK" || warn "Proxy test: FAIL"
+  else
+    echo -e "${CYN}Proxy:${NC} (none)"
+  fi
+fi
+
+if [ -n "$MARZBAN_BIN" ]; then ok "marzban: $MARZBAN_BIN"; else warn "marzban: not found in PATH"; fi
+}
+
+cmd_update(){
+say "Updating mbm from GitHub..."
+tmp="$(mktemp)"
+curl -fsSL "$REPO_RAW_BASE/mbm" -o "$tmp"
+curl -fsSL "$REPO_RAW_BASE/VERSION" -o "${tmp}.ver" || true
+
+install -m 755 "$tmp" /usr/local/bin/mbm
+mkdir -p "$APP_DIR"
+[ -s "${tmp}.ver" ] && install -m 644 "${tmp}.ver" "$APP_DIR/VERSION"
+
+rm -f "$tmp" "${tmp}.ver"
+ok "Updated. Current version: $(/usr/local/bin/mbm version | tr -d '\r')"
 }
 
 cmd_install(){
 ensure_deps
-
-echo -e "${CYN}Telegram Bot Token:${NC}"
-read TOKEN
-
-echo -e "${CYN}Telegram Chat ID:${NC}"
-read CHAT_ID
-
+echo -e "${CYN}Telegram Bot Token:${NC}"; read TOKEN
+echo -e "${CYN}Telegram Chat ID:${NC}"; read CHAT_ID
 validate_proxy
-
-echo -e "${CYN}\nBackup interval (minutes):${NC}"
-read INTERVAL_MINUTES
-
+echo -e "${CYN}\nBackup interval (minutes):${NC}"; read INTERVAL_MINUTES
 save_conf
 setup_cron
 ok "Installed successfully ✅"
-
-# Immediate first backup after install
 say "Running first backup now..."
 cmd_backup
 }
@@ -228,18 +238,14 @@ cmd_backup(){
 ensure_deps
 load_conf
 
+[ -n "$MARZBAN_BIN" ] || { err "marzban command not found (PATH issue)."; exit 1; }
+
 DIR="/opt/marzban/backup"
 mkdir -p "$DIR"
 
-if ! command -v marzban >/dev/null 2>&1; then
-  err "marzban command not found on this server."
-  exit 1
-fi
-
-marzban backup >/dev/null 2>&1 || true
-
+"$MARZBAN_BIN" backup >/dev/null 2>&1 || true
 LATEST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
-[ -n "$LATEST" ] || { err "No backup file found in $DIR"; exit 1; }
+[ -n "$LATEST" ] || { err "No backup found in $DIR"; exit 1; }
 
 STAMP=$(jalali_stamp)
 HUMAN=$(jalali_human)
@@ -252,13 +258,11 @@ CAPTION="📦 Backup Information
 ⏰ Backup Time: $HUMAN"
 
 API="https://api.telegram.org/bot${TOKEN}/sendDocument"
-
 if [ -n "${PROXY:-}" ]; then
   curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
 else
   curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
 fi
-
 ok "Backup sent ✅"
 }
 
@@ -266,21 +270,11 @@ cmd_restore(){
 ensure_deps
 FILE="$2"
 [ -f "$FILE" ] || { err "File not found: $FILE"; exit 1; }
+[ -n "$MARZBAN_BIN" ] || { err "marzban command not found (PATH issue)."; exit 1; }
 
-if ! command -v marzban >/dev/null 2>&1; then
-  err "marzban command not found on this server."
-  exit 1
-fi
-
-say "Stopping marzban..."
-marzban down >/dev/null 2>&1 || true
-
-say "Extracting backup..."
-tar -xzf "$FILE" -C /
-
-say "Starting marzban..."
-marzban up -n >/dev/null 2>&1 || true
-
+say "Stopping marzban..."; "$MARZBAN_BIN" down >/dev/null 2>&1 || true
+say "Extracting backup..."; tar -xzf "$FILE" -C /
+say "Starting marzban..."; "$MARZBAN_BIN" up -n >/dev/null 2>&1 || true
 ok "Restore complete ✅"
 }
 
@@ -295,6 +289,9 @@ case "${1:-}" in
 install) cmd_install ;;
 backup) cmd_backup ;;
 restore) cmd_restore "$@" ;;
+status) cmd_status ;;
+version) cmd_version ;;
+update) cmd_update ;;
 uninstall) cmd_uninstall ;;
 help|"") help ;;
 *) help ;;
