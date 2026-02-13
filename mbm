@@ -1,231 +1,111 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -e
 
 APP_DIR="/opt/marzban-backup"
 CONF="$APP_DIR/config.conf"
-BIN="/usr/local/bin/mbm"
 CRON_TAG="# mbm-backup"
 
-# ===== colors =====
-RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'
-MAG='\033[0;35m'; WHT='\033[1;37m'; NC='\033[0m'
-say(){ echo -e "${CYN}➜${NC} $*"; }
-ok(){ echo -e "${GRN}✔${NC} $*"; }
-warn(){ echo -e "${YLW}⚠${NC} $*"; }
-err(){ echo -e "${RED}✖${NC} $*"; }
-title(){ echo -e "${MAG}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n${WHT}$*${NC}\n${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
-
-need_root(){ [ "$(id -u)" -eq 0 ] || { err "Run as root"; exit 1; }; }
-
 install_deps(){
-  title "Installing dependencies"
-  if command -v apt-get >/dev/null 2>&1; then
-    say "apt-get: curl python3 python3-pip"
-    apt-get update -y
-    apt-get install -y curl python3 python3-pip
-  elif command -v yum >/dev/null 2>&1; then
-    say "yum: curl python3 python3-pip"
-    yum install -y curl python3 python3-pip || yum install -y curl python3 || true
-  else
-    err "No supported package manager. Install curl+python3+pip manually."
-    exit 1
-  fi
-
-  say "Installing python module: jdatetime"
-  python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
-  python3 -m pip install -q jdatetime >/dev/null 2>&1
-  ok "Deps OK"
-}
-
-load_conf(){
-  [ -f "$CONF" ] || { err "Not installed. Run: mbm install"; exit 1; }
-  # shellcheck disable=SC1090
-  source "$CONF"
+apt-get update -y >/dev/null 2>&1 || true
+apt-get install -y curl python3 python3-pip cron >/dev/null 2>&1 || true
+systemctl enable --now cron >/dev/null 2>&1 || true
+python3 -m pip install -q jdatetime >/dev/null 2>&1
 }
 
 save_conf(){
-  mkdir -p "$APP_DIR"
-  {
-    printf 'TOKEN="%s"\n' "$TOKEN"
-    printf 'CHAT_ID="%s"\n' "$CHAT_ID"
-    printf 'PROXY="%s"\n' "$PROXY"
-    printf 'INTERVAL_MINUTES="%s"\n' "$INTERVAL_MINUTES"
-  } > "$CONF"
-  chmod 600 "$CONF"
+mkdir -p "$APP_DIR"
+cat > "$CONF" <<CFG
+TOKEN="$TOKEN"
+CHAT_ID="$CHAT_ID"
+PROXY="$PROXY"
+INTERVAL_MINUTES="$INTERVAL_MINUTES"
+CFG
+chmod 600 "$CONF"
+}
+
+load_conf(){
+source "$CONF"
 }
 
 setup_cron(){
-  crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
-  (crontab -l 2>/dev/null; echo "*/$INTERVAL_MINUTES * * * * $BIN backup >/dev/null 2>&1 $CRON_TAG") | crontab -
-  ok "Cron: every $INTERVAL_MINUTES minute(s)"
+crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+(crontab -l 2>/dev/null; echo "*/$INTERVAL_MINUTES * * * * /usr/local/bin/mbm backup >/dev/null 2>&1 $CRON_TAG") | crontab -
 }
-
-remove_cron(){
-  crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
-}
-
-detect_ip(){
-  local ip=""
-  ip=$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src"){print $(i+1); exit}}' || true)
-  [ -z "$ip" ] && ip=$(ip -4 -br a 2>/dev/null | awk '$1!="lo"{print $3}' | head -n1 | cut -d/ -f1 || true)
-  [ -z "$ip" ] && ip=$(curl -s --max-time 5 ifconfig.me || true)
-  echo "${ip:-unknown}"
-}
-
-tz_offset(){ date +%z 2>/dev/null || echo ""; }
 
 jalali_stamp(){
-  python3 - <<'PY'
+python3 - <<PY
 from datetime import datetime
 import jdatetime
-jnow = jdatetime.datetime.fromgregorian(datetime=datetime.now())
-print(jnow.strftime("%Y-%m-%d_%H-%M-%S"))
+print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-%d_%H-%M-%S"))
 PY
 }
 
 jalali_human(){
-  python3 - <<'PY'
+python3 - <<PY
 from datetime import datetime
 import jdatetime
-jnow = jdatetime.datetime.fromgregorian(datetime=datetime.now())
-print(jnow.strftime("%Y-%m-%d %H:%M:%S"))
+print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-%d %H:%M:%S"))
 PY
 }
 
 cmd_install(){
-  need_root
-  install_deps
-
-  title "mbm install"
-  read -r -p "Telegram Bot Token: " TOKEN
-  read -r -p "Telegram Chat ID (numeric): " CHAT_ID
-  read -r -p "SOCKS Proxy (optional, ex: socks5h://127.0.0.1:1080): " PROXY
-  read -r -p "Backup interval (minutes, ex: 60): " INTERVAL_MINUTES
-
-  [ -n "$TOKEN" ] || { err "TOKEN empty"; exit 1; }
-  [ -n "$CHAT_ID" ] || { err "CHAT_ID empty"; exit 1; }
-  [[ "$INTERVAL_MINUTES" =~ ^[0-9]+$ ]] && [ "$INTERVAL_MINUTES" -gt 0 ] || { err "Interval invalid"; exit 1; }
-
-  save_conf
-  setup_cron
-  ok "Installed ✅"
-  say "Try: mbm backup"
+install_deps
+read -p "Telegram Bot Token: " TOKEN </dev/tty
+read -p "Telegram Chat ID: " CHAT_ID </dev/tty
+read -p "SOCKS5 Proxy (optional): " PROXY </dev/tty
+read -p "Backup interval (minutes): " INTERVAL_MINUTES </dev/tty
+save_conf
+setup_cron
+echo "Installed successfully ✅"
 }
 
 cmd_backup(){
-  load_conf
-  title "mbm backup"
+load_conf
+DIR="/opt/marzban/backup"
+mkdir -p "$DIR"
+marzban backup >/dev/null 2>&1 || true
+LATEST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1)
+STAMP=$(jalali_stamp)
+HUMAN=$(jalali_human)
+NEW="$DIR/backup_${STAMP}.tar.gz"
+mv -f "$LATEST" "$NEW"
 
-  local server_ip backup_dir latest stamp human tz newfile caption api
-  local -a proxy_args=()
+CAPTION="📦 Backup Information
+🌐 Server IP: $(hostname -I | awk '{print $1}')
+📁 Backup File: $NEW
+⏰ Backup Time: $HUMAN"
 
-  server_ip="$(detect_ip)"
-  backup_dir="/opt/marzban/backup"
-  mkdir -p "$backup_dir"
+API="https://api.telegram.org/bot${TOKEN}/sendDocument"
 
-  say "Running: marzban backup"
-  if ! marzban backup >/dev/null 2>&1; then
-    warn "marzban backup failed; trying latest existing backup..."
-  fi
+if [ -n "$PROXY" ]; then
+curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
+else
+curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
+fi
 
-  latest="$(ls -t "$backup_dir"/*.tar.gz 2>/dev/null | head -n1 || true)"
-  [ -n "$latest" ] || { err "No backup .tar.gz found in $backup_dir"; exit 1; }
-
-  stamp="$(jalali_stamp)"
-  human="$(jalali_human)"
-  tz="$(tz_offset)"
-  newfile="$backup_dir/backup_${stamp}.tar.gz"
-
-  if [ "$latest" != "$newfile" ]; then
-    mv -f "$latest" "$newfile"
-    ok "Renamed -> $(basename "$newfile")"
-  else
-    ok "Filename already OK"
-  fi
-
-  caption="📦 Backup Information
-🌐 Server IP: $server_ip
-📁 Backup File: $newfile
-⏰ Backup Time: ${human} ${tz}"
-
-  api="https://api.telegram.org/bot${TOKEN}/sendDocument"
-
-  if [ -n "${PROXY:-}" ]; then
-    proxy_args=(--proxy "$PROXY")
-    say "Proxy: $PROXY"
-  else
-    say "Proxy: (none)"
-  fi
-
-  say "Sending to Telegram..."
-  curl -sS "${proxy_args[@]}" \
-    -F chat_id="$CHAT_ID" \
-    -F caption="$caption" \
-    -F document=@"$newfile" \
-    "$api" >/dev/null
-
-  ok "Backup sent ✅"
-  echo "$newfile"
+echo "Backup sent ✅"
 }
 
 cmd_restore(){
-  need_root
-  title "mbm restore"
-
-  local file="${2:-}"
-  [ -n "$file" ] || { err "Usage: mbm restore /path/to/backup.tar.gz"; exit 1; }
-  [ -f "$file" ] || { err "File not found: $file"; exit 1; }
-
-  warn "این کار دیتا رو با بکاپ جایگزین می‌کنه."
-  read -r -p "Continue? (y/N): " ans
-  [[ "$ans" =~ ^[Yy]$ ]] || { warn "Canceled."; exit 0; }
-
-  say "Stopping Marzban..."
-  marzban down >/dev/null 2>&1 || true
-  ok "Stopped"
-
-  say "Extracting to / ..."
-  tar -xzf "$file" -C /
-  ok "Extracted"
-
-  say "Starting Marzban..."
-  marzban up -n >/dev/null 2>&1 || true
-  ok "Restore completed ✅"
+FILE="$2"
+[ -f "$FILE" ] || { echo "File not found"; exit 1; }
+marzban down >/dev/null 2>&1 || true
+tar -xzf "$FILE" -C /
+marzban up -n >/dev/null 2>&1 || true
+echo "Restore complete ✅"
 }
 
 cmd_uninstall(){
-  need_root
-  title "mbm uninstall"
-
-  remove_cron
-  rm -rf "$APP_DIR"
-  rm -f "$BIN"
-
-  ok "Uninstalled completely ✅"
+crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+rm -rf "$APP_DIR"
+rm -f /usr/local/bin/mbm
+echo "Uninstalled ✅"
 }
 
-cmd_help(){
-  title "Marzban Backup Manager (mbm) — Help"
-  cat <<'H'
-Commands:
-  mbm install
-  mbm backup
-  mbm restore /path/to/backup.tar.gz
-  mbm uninstall
-  mbm help
-
-Notes:
-- Backup filename (Jalali): backup_1404-11-24_16-00-01.tar.gz
-- Caption includes Server IP, file path, and Jalali time.
-- SOCKS proxy is optional (use in Iran).
-H
-}
-
-case "${1:-help}" in
-  install)   cmd_install ;;
-  backup)    cmd_backup ;;
-  restore)   cmd_restore "$@" ;;
-  uninstall) cmd_uninstall ;;
-  help|-h|--help) cmd_help ;;
-  *) err "Unknown command: ${1:-}"; cmd_help; exit 1 ;;
+case "$1" in
+install) cmd_install ;;
+backup) cmd_backup ;;
+restore) cmd_restore "$@" ;;
+uninstall) cmd_uninstall ;;
+*) echo "Usage: mbm {install|backup|restore|uninstall}" ;;
 esac
