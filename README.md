@@ -1,4 +1,4 @@
-# 🚀 Marzban Backup Manager (mbm)
+# 🚀 Marzban Backup Manager (MBM)
 
 Professional Telegram Backup & Restore Manager for Marzban Panel
 
@@ -7,19 +7,18 @@ Professional Telegram Backup & Restore Manager for Marzban Panel
 ## ✨ Features
 
 - 📦 Automatic Marzban backup
-- 🗓 Jalali (Shamsi) timestamped backups
-- 📤 Sends backup to Telegram with detailed caption
-- 🌐 Server IP auto-detection
-- 🧦 Optional SOCKS5 proxy support (for Iran)
-- ⏱ Custom cron interval (minute-based)
+- 🗓 Jalali (Shamsi) timestamp
+- 📤 Sends backup to Telegram
+- 🌐 Auto-detect Server IP
+- 🧦 Optional SOCKS5 support
+- ⏱ Minute-based cron schedule
 - ♻ One-command restore
-- 🧹 Clean uninstall support
+- 🧹 Clean uninstall
 - 🎨 Colored CLI interface
 
 ---
 
-## 📦 Installation
+# ⚡ One-Line Installation
 
 ```bash
-chmod +x install.sh
-sudo ./install.sh
+bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh) auto

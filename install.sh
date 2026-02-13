@@ -22,3 +22,15 @@ install -m 755 "$SCRIPT_DIR/mbm" /usr/local/bin/mbm
 
 ok "mbm installed ✅"
 say "Now run: mbm install"
+
+# Auto install mode
+if [ "$1" = "auto" ]; then
+    echo -e "\nStarting MBM setup...\n"
+    sleep 1
+    if command -v mbm >/dev/null 2>&1; then
+        sudo mbm install
+    else
+        echo "mbm command not found. Installation may have failed."
+        exit 1
+    fi
+fi
