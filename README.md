@@ -2,9 +2,9 @@
 
 # 🚀 Marzban Backup Manager (MBM)
 
-Professional Telegram Backup & Restore Manager for Marzban Panel
+Telegram Backup & Restore Manager for Marzban Panel
 
-### 🇮🇷 [مشاهده نسخه فارسی](README_FA.md)
+🇮🇷 **[مشاهده نسخه فارسی](README_FA.md)**
 
 </div>
 
@@ -12,44 +12,50 @@ Professional Telegram Backup & Restore Manager for Marzban Panel
 
 ## ✨ Features
 
-- Full Marzban backup
+- Full Marzban backup & restore
 - Jalali (Shamsi) timestamped backups
-- Telegram backup sending
-- Local IP detection (Iran-safe)
-- Optional SOCKS5 support
-- Smart cron scheduling
-- One-command restore
+- Sends backup to Telegram with detailed caption
+- Safe local IP detection (Iran compatible)
+- Optional SOCKS5 proxy support
+- Smart cron scheduling (minute-based)
+- One-command restore + marzban restart
 - Clean uninstall
-- Versioning & update support
-- Status command
+- Version / Status / Update commands
 
 ---
 
-## 📦 One-Line Installation
+## 📦 Installation (One-Line)
 
-```bash
-bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
-```
+    bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
+
 ---
 
 ## 📖 Commands
 
-mbm install  
-mbm backup  
-mbm restore <file>  
-mbm status  
-mbm version  
-mbm update  
-mbm uninstall  
-mbm help  
+    mbm install
+    mbm backup
+    mbm restore <file>
+    mbm status
+    mbm version
+    mbm update
+    mbm uninstall
+    mbm help
 
 ---
 
-## 📁 Backup Scope
+## 🛠 Troubleshooting
 
-- /var/lib/marzban  
-- /opt/marzban  
+### syntax error near unexpected token ')'
 
----
+This means your installed `mbm` file is corrupted (bad update or incomplete download).
 
-Current Version: v1.1.0
+Reinstall latest version:
+
+    sudo curl -fsSL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/mbm -o /usr/local/bin/mbm
+    sudo chmod +x /usr/local/bin/mbm
+    sudo sed -i 's/\r$//' /usr/local/bin/mbm
+
+Then verify:
+
+    mbm version
+
