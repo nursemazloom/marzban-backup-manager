@@ -40,6 +40,13 @@ ok(){ echo -e "${GRN}✔${NC} $*"; }
 warn(){ echo -e "${YLW}⚠${NC} $*"; }
 err(){ echo -e "${RED}✖${NC} $*"; }
 
+
+title(){
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHT}$*${NC}"
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
 # ===== marzban binary (robust) =====
 MARZBAN_BIN="$(command -v marzban 2>/dev/null || true)"
 [ -z "$MARZBAN_BIN" ] && [ -x /usr/local/bin/marzban ] && MARZBAN_BIN="/usr/local/bin/marzban"
