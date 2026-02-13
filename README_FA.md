@@ -1,10 +1,10 @@
 <div align="center">
 
-# 🚀 مدیر بکاپ مرزبان (MBM)
+# 🚀 Marzban Backup Manager (MBM)
 
-سیستم حرفه‌ای بکاپ و ریستور مرزبان با ارسال به تلگرام
+مدیریت حرفه‌ای بکاپ و ریستور مرزبان با ارسال به تلگرام
 
-### 🇬🇧 [English Version](README.md)
+🇬🇧 **[English Version](README.md)**
 
 </div>
 
@@ -12,43 +12,60 @@
 
 ## ✨ امکانات
 
-- بکاپ کامل مرزبان
-- ذخیره با تاریخ شمسی
-- ارسال بکاپ به تلگرام
-- تشخیص آی‌پی به صورت لوکال (بدون 403 در ایران)
-- پشتیبانی از SOCKS5 اختیاری
-- کرون جاب هوشمند
-- ریستور با یک دستور
-- حذف کامل
-- نمایش وضعیت
-- نسخه‌بندی و آپدیت
+- بکاپ کامل از Marzban
+- تاریخ شمسی (Jalali) در نام فایل
+- ارسال خودکار به تلگرام همراه با کپشن کامل
+- پشتیبانی از SOCKS5 (مناسب سرور ایران)
+- زمان‌بندی هوشمند کرون
+- دستورات Version / Status / Update
+- حذف کامل با یک دستور
 
 ---
 
 ## 📦 نصب با یک دستور
 
-bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
+    bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
 
 ---
 
 ## 📖 دستورات
 
-mbm install  
-mbm backup  
-mbm restore <file>  
-mbm status  
-mbm version  
-mbm update  
-mbm uninstall  
-mbm help  
+    mbm install
+    mbm backup
+    mbm restore <file>
+    mbm status
+    mbm version
+    mbm update
+    mbm uninstall
+    mbm help
 
 ---
 
-## 📁 مسیرهای بکاپ
+## 🛠 رفع خطا
 
-- /var/lib/marzban  
-- /opt/marzban  
+### خطای syntax error near unexpected token ')'
+
+اگر این خطا را دیدید یعنی فایل mbm ناقص دانلود شده.
+
+دوباره نصب کنید:
+
+    sudo curl -fsSL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/mbm -o /usr/local/bin/mbm
+    sudo chmod +x /usr/local/bin/mbm
+    sudo sed -i 's/\r$//' /usr/local/bin/mbm
+
+سپس بررسی کنید:
+
+    mbm version
 
 ---
 
-نسخه فعلی: v1.1.0
+## 📂 مسیر بکاپ
+
+بکاپ‌ها در مسیر زیر ذخیره می‌شوند:
+
+    /opt/marzban/backup
+
+---
+
+## ❤️ توسعه داده شده برای مدیریت حرفه‌ای مرزبان
+
