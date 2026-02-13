@@ -302,23 +302,30 @@ ok "Backup completed and sent ✅"
 
 
 
+
 cmd_restore(){
 ensure_deps
 load_conf
 
 BACKUP_DIR="/opt/marzban-backup/backups"
-
 LATEST=$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
 
 echo
-echo "Available latest backup:"
-echo "  $LATEST"
+title "MBM Restore  v${VERSION}"
+
+if [ -z "$LATEST" ]; then
+  err "No backups found in: $BACKUP_DIR"
+  exit 1
+fi
+
+echo -e "${CYN}Latest backup found:${NC}"
+echo -e "  ${WHT}$LATEST${NC}"
 echo
-echo "Enter backup file path to restore."
-echo "Press ENTER to restore latest backup."
+echo -e "${YLW}Enter backup file path to restore.${NC}"
+echo -e "${YLW}Press ENTER to restore latest backup:${NC} ${WHT}$LATEST${NC}"
 echo
 
-read -p "Backup path: " INPUT
+read -r -p "Backup path: " INPUT
 
 if [ -z "$INPUT" ]; then
   FILE="$LATEST"
@@ -326,28 +333,35 @@ else
   FILE="$INPUT"
 fi
 
-[ -f "$FILE" ] || { err "Backup file not found."; exit 1; }
+[ -f "$FILE" ] || { err "Backup file not found: $FILE"; exit 1; }
 
 echo
-warn "WARNING ⚠"
-echo "This will REPLACE your current Marzban data with:"
-echo "  $FILE"
+echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${RED}⚠⚠  WARNING — DANGEROUS OPERATION  ⚠⚠${NC}"
+echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHT}This will REPLACE your current Marzban data with:${NC}"
+echo -e "  ${YLW}$FILE${NC}"
 echo
-read -p "Type 'yes' to continue: " CONFIRM
+echo -e "${YLW}Type exactly:${NC} ${WHT}yes${NC}  ${YLW}to continue.${NC}"
+echo -e "${YLW}Press ENTER or anything else to cancel.${NC}"
+echo
 
+read -r -p "Confirm (yes): " CONFIRM
 [ "$CONFIRM" = "yes" ] || { warn "Restore cancelled."; exit 0; }
 
 say "Stopping Marzban..."
 $MARZBAN_BIN down >/dev/null 2>&1 || true
 
 say "Restoring backup..."
-tar -xzf "$FILE" -C /
+tar -xzf "$FILE" -C / || { err "Restore failed while extracting archive."; exit 1; }
 
 say "Starting Marzban..."
-$MARZBAN_BIN up >/dev/null 2>&1 || true
+# Avoid blocking behavior: restart without following logs
+$MARZBAN_BIN restart -n >/dev/null 2>&1 || $MARZBAN_BIN up -n >/dev/null 2>&1 || true
 
 ok "Restore completed successfully ✅"
 }
+
 
 
 cmd_uninstall(){
