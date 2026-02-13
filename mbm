@@ -1,15 +1,71 @@
 #!/usr/bin/env bash
 set -e
 
+# Colors
+RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'
+MAG='\033[0;35m'; WHT='\033[1;37m'; NC='\033[0m'
+say(){ echo -e "${CYN}➜${NC} $*"; }
+ok(){ echo -e "${GRN}✔${NC} $*"; }
+warn(){ echo -e "${YLW}⚠${NC} $*"; }
+err(){ echo -e "${RED}✖${NC} $*"; }
+
 APP_DIR="/opt/marzban-backup"
 CONF="$APP_DIR/config.conf"
 CRON_TAG="# mbm-backup"
 
+help(){
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${WHT}Marzban Backup Manager (mbm)${NC}"
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${CYN}Usage:${NC}"
+echo -e "  ${WHT}mbm install${NC}     Setup Telegram + Proxy + Schedule (and run first backup)"
+echo -e "  ${WHT}mbm backup${NC}      Create backup now and send to Telegram"
+echo -e "  ${WHT}mbm restore <file>${NC}  Restore a backup tar.gz and restart marzban"
+echo -e "  ${WHT}mbm uninstall${NC}   Remove mbm + cron + config"
+echo -e "  ${WHT}mbm help${NC}        Show this help"
+echo
+echo -e "${YLW}Proxy formats (optional):${NC}"
+echo -e "  socks5h://127.0.0.1:1080   (recommended for Iran)"
+echo -e "  socks5://127.0.0.1:1080"
+echo -e "  or just: 127.0.0.1:1080"
+echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
+
 install_deps(){
+say "Installing dependencies..."
+export DEBIAN_FRONTEND=noninteractive
+
 apt-get update -y >/dev/null 2>&1 || true
-apt-get install -y curl python3 python3-pip cron >/dev/null 2>&1 || true
+apt-get install -y curl cron python3 python3-pip >/dev/null 2>&1 || true
 systemctl enable --now cron >/dev/null 2>&1 || true
-python3 -m pip install -q jdatetime >/dev/null 2>&1 || true
+
+# jdatetime: try apt first, then pip fallback
+if python3 -c "import jdatetime" >/dev/null 2>&1; then
+  ok "Python module jdatetime is available"
+  return
+fi
+
+apt-get install -y python3-jdatetime >/dev/null 2>&1 || true
+
+if python3 -c "import jdatetime" >/dev/null 2>&1; then
+  ok "Installed jdatetime via apt"
+  return
+fi
+
+# pip fallback (handles Debian/Ubuntu externally-managed)
+python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+python3 -m pip install -q jdatetime --break-system-packages >/dev/null 2>&1 || \
+python3 -m pip install -q --user jdatetime >/dev/null 2>&1 || true
+
+python3 -c "import jdatetime" >/dev/null 2>&1 && ok "Installed jdatetime via pip" || warn "Could not auto-install jdatetime"
+}
+
+ensure_deps(){
+# Make backup reliable even if user never ran install (but still needs config)
+if ! command -v curl >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; then
+  install_deps
+fi
+python3 -c "import jdatetime" >/dev/null 2>&1 || install_deps
 }
 
 save_conf(){
@@ -24,11 +80,12 @@ chmod 600 "$CONF"
 }
 
 load_conf(){
+[ -f "$CONF" ] || { err "Not installed. Run: mbm install"; exit 1; }
+# shellcheck disable=SC1090
 source "$CONF"
 }
 
 cron_expr_from_minutes(){
-# input: total minutes (>=1), output: cron schedule "m h dom mon dow"
 M="$1"
 if ! [[ "$M" =~ ^[0-9]+$ ]] || [ "$M" -lt 1 ]; then
   echo ""
@@ -43,18 +100,12 @@ fi
 H=$(( M / 60 ))
 R=$(( M % 60 ))
 
-# cap hours step to 23 to avoid cron weirdness
-# if H > 23, keep it daily-ish: run every H hours still ok in many cron impl, but safe fallback:
-# We'll keep it as */H (cron accepts >23 in hour field? some do, but better keep within 1..23)
-# If very large, convert to daily run at 00:00
 if [ "$H" -ge 24 ] && [ "$R" -eq 0 ]; then
   echo "0 0 */$((H/24)) * *"
   return
 fi
 
 if [ "$H" -ge 24 ] && [ "$R" -ne 0 ]; then
-  # fallback: run daily at 00:00 plus minute step R
-  # (still no error)
   echo "*/$R 0 */$((H/24)) * *"
   return
 fi
@@ -62,18 +113,17 @@ fi
 if [ "$R" -eq 0 ]; then
   echo "0 */$H * * *"
 else
-  # Note: cron can't express "every 90 minutes" perfectly; this is an approximation but never errors.
   echo "*/$R */$H * * *"
 fi
 }
 
 setup_cron(){
 expr="$(cron_expr_from_minutes "$INTERVAL_MINUTES")"
-[ -n "$expr" ] || { echo "Invalid interval"; exit 1; }
+[ -n "$expr" ] || { err "Invalid interval. Enter a number of minutes (>=1)."; exit 1; }
 
 crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
 (crontab -l 2>/dev/null; echo "$expr /usr/local/bin/mbm backup >/dev/null 2>&1 $CRON_TAG") | crontab -
-echo "Cron set: $expr"
+ok "Cron set: $expr"
 }
 
 jalali_stamp(){
@@ -100,7 +150,7 @@ curl --proxy "$p" -I -s --max-time 10 https://api.telegram.org >/dev/null 2>&1
 validate_proxy(){
 while true; do
   echo
-  echo "SOCKS5 Proxy (optional)"
+  echo -e "${WHT}SOCKS5 Proxy (optional)${NC}"
   echo "Formats:"
   echo "  socks5h://127.0.0.1:1080   (recommended for Iran - DNS via proxy)"
   echo "  socks5://127.0.0.1:1080"
@@ -114,7 +164,7 @@ while true; do
   fi
 
   if [[ "$INPUT" =~ ^http ]]; then
-    echo "Invalid format ❌ Only socks5/socks5h supported"
+    err "Invalid format. Only socks5/socks5h supported."
     continue
   fi
 
@@ -126,60 +176,70 @@ while true; do
   elif [[ "$INPUT" =~ ^socks5:// ]]; then
     base="${INPUT#socks5://}"
   else
-    echo "Invalid format ❌"
+    err "Invalid format."
     continue
   fi
 
   c1="socks5h://$base"
   c2="socks5://$base"
 
-  echo "Testing proxy (1/2): $c1"
+  say "Testing proxy (1/2): $c1"
   if proxy_try "$c1"; then
-    echo "Proxy OK ✅ Using: $c1"
+    ok "Proxy OK. Using: $c1"
     PROXY="$c1"
     return
   fi
 
-  echo "Testing proxy (2/2): $c2"
+  say "Testing proxy (2/2): $c2"
   if proxy_try "$c2"; then
-    echo "Proxy OK ✅ Using: $c2"
+    ok "Proxy OK. Using: $c2"
     PROXY="$c2"
     return
   fi
 
-  echo "Proxy failed ❌ (both socks5h and socks5) — try again."
+  err "Proxy failed with both socks5h and socks5. Try again."
 done
 }
 
 cmd_install(){
-install_deps
+ensure_deps
 
-echo "Telegram Bot Token:"
+echo -e "${CYN}Telegram Bot Token:${NC}"
 read TOKEN
 
-echo "Telegram Chat ID:"
+echo -e "${CYN}Telegram Chat ID:${NC}"
 read CHAT_ID
 
 validate_proxy
 
-echo
-echo "Backup interval (minutes):"
+echo -e "${CYN}\nBackup interval (minutes):${NC}"
 read INTERVAL_MINUTES
 
 save_conf
 setup_cron
-echo "Installed successfully ✅"
+ok "Installed successfully ✅"
+
+# Immediate first backup after install
+say "Running first backup now..."
+cmd_backup
 }
 
 cmd_backup(){
+ensure_deps
 load_conf
+
 DIR="/opt/marzban/backup"
 mkdir -p "$DIR"
+
+if ! command -v marzban >/dev/null 2>&1; then
+  err "marzban command not found on this server."
+  exit 1
+fi
 
 marzban backup >/dev/null 2>&1 || true
 
 LATEST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
-[ -n "$LATEST" ] || { echo "No backup found in $DIR"; exit 1; }
+[ -n "$LATEST" ] || { err "No backup file found in $DIR"; exit 1; }
 
 STAMP=$(jalali_stamp)
 HUMAN=$(jalali_human)
@@ -194,34 +254,48 @@ CAPTION="📦 Backup Information
 API="https://api.telegram.org/bot${TOKEN}/sendDocument"
 
 if [ -n "${PROXY:-}" ]; then
-curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
+  curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
 else
-curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
+  curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
 fi
 
-echo "Backup sent ✅"
+ok "Backup sent ✅"
 }
 
 cmd_restore(){
+ensure_deps
 FILE="$2"
-[ -f "$FILE" ] || { echo "File not found"; exit 1; }
+[ -f "$FILE" ] || { err "File not found: $FILE"; exit 1; }
+
+if ! command -v marzban >/dev/null 2>&1; then
+  err "marzban command not found on this server."
+  exit 1
+fi
+
+say "Stopping marzban..."
 marzban down >/dev/null 2>&1 || true
+
+say "Extracting backup..."
 tar -xzf "$FILE" -C /
+
+say "Starting marzban..."
 marzban up -n >/dev/null 2>&1 || true
-echo "Restore complete ✅"
+
+ok "Restore complete ✅"
 }
 
 cmd_uninstall(){
 crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
 rm -rf "$APP_DIR"
 rm -f /usr/local/bin/mbm
-echo "Uninstalled ✅"
+ok "Uninstalled ✅"
 }
 
-case "$1" in
+case "${1:-}" in
 install) cmd_install ;;
 backup) cmd_backup ;;
 restore) cmd_restore "$@" ;;
 uninstall) cmd_uninstall ;;
-*) echo "Usage: mbm {install|backup|restore|uninstall}" ;;
+help|"") help ;;
+*) help ;;
 esac
