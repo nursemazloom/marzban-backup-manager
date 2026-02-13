@@ -48,45 +48,71 @@ print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-
 PY
 }
 
+proxy_try(){
+# returns 0 if works
+local p="$1"
+curl --proxy "$p" -I -s --max-time 10 https://api.telegram.org >/dev/null 2>&1
+}
+
 validate_proxy(){
 while true; do
-echo
-echo "SOCKS5 Proxy (optional)"
-echo "Format: socks5://127.0.0.1:1080"
-echo "Leave empty if not needed:"
-read INPUT
+  echo
+  echo "SOCKS5 Proxy (optional)"
+  echo "Formats:"
+  echo "  socks5h://127.0.0.1:1080   (recommended for Iran - DNS via proxy)"
+  echo "  socks5://127.0.0.1:1080"
+  echo "Tip: you can also enter just: 127.0.0.1:1080"
+  echo "Leave empty if not needed:"
+  read INPUT
 
-if [ -z "$INPUT" ]; then
-PROXY=""
-return
-fi
+  if [ -z "$INPUT" ]; then
+    PROXY=""
+    return
+  fi
 
-# اگر فقط ip:port داد
-if [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
-INPUT="socks5://$INPUT"
-fi
+  # block http/https
+  if [[ "$INPUT" =~ ^http ]]; then
+    echo "Invalid format ❌ Only socks5/socks5h supported"
+    continue
+  fi
 
-# جلوگیری از http
-if [[ "$INPUT" =~ ^http ]]; then
-echo "Invalid format ❌ Only socks5 supported"
-continue
-fi
+  local base=""
+  local c1="" c2=""
 
-# چک فرمت نهایی
-if [[ ! "$INPUT" =~ ^socks5:// ]]; then
-echo "Invalid format ❌"
-continue
-fi
+  # ip:port only
+  if [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
+    base="$INPUT"
+    c1="socks5h://$base"
+    c2="socks5://$base"
+  elif [[ "$INPUT" =~ ^socks5h:// ]]; then
+    base="${INPUT#socks5h://}"
+    c1="socks5h://$base"
+    c2="socks5://$base"
+  elif [[ "$INPUT" =~ ^socks5:// ]]; then
+    base="${INPUT#socks5://}"
+    # prefer socks5h first even if user typed socks5
+    c1="socks5h://$base"
+    c2="socks5://$base"
+  else
+    echo "Invalid format ❌"
+    continue
+  fi
 
-echo "Testing proxy connection..."
-if curl --proxy "$INPUT" -m 10 -s https://api.telegram.org >/dev/null; then
-echo "Proxy OK ✅"
-PROXY="$INPUT"
-return
-else
-echo "Proxy failed ❌ Try again."
-fi
+  echo "Testing proxy (1/2): $c1"
+  if proxy_try "$c1"; then
+    echo "Proxy OK ✅ Using: $c1"
+    PROXY="$c1"
+    return
+  fi
 
+  echo "Testing proxy (2/2): $c2"
+  if proxy_try "$c2"; then
+    echo "Proxy OK ✅ Using: $c2"
+    PROXY="$c2"
+    return
+  fi
+
+  echo "Proxy failed ❌ (both socks5h and socks5) — try again."
 done
 }
 
@@ -114,8 +140,12 @@ cmd_backup(){
 load_conf
 DIR="/opt/marzban/backup"
 mkdir -p "$DIR"
+
 marzban backup >/dev/null 2>&1 || true
-LATEST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1)
+
+LATEST=$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
+[ -n "$LATEST" ] || { echo "No backup found in $DIR"; exit 1; }
+
 STAMP=$(jalali_stamp)
 HUMAN=$(jalali_human)
 NEW="$DIR/backup_${STAMP}.tar.gz"
@@ -128,7 +158,7 @@ CAPTION="📦 Backup Information
 
 API="https://api.telegram.org/bot${TOKEN}/sendDocument"
 
-if [ -n "$PROXY" ]; then
+if [ -n "${PROXY:-}" ]; then
 curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
 else
 curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$NEW" "$API" >/dev/null
