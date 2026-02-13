@@ -3,24 +3,46 @@ set -e
 
 RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'
 MAG='\033[0;35m'; WHT='\033[1;37m'; NC='\033[0m'
+say(){ echo -e "${CYN}➜${NC} $*"; }
+ok(){ echo -e "${GRN}✔${NC} $*"; }
+warn(){ echo -e "${YLW}⚠${NC} $*"; }
+err(){ echo -e "${RED}✖${NC} $*"; }
+title(){ echo -e "${MAG}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n${WHT}Marzban Backup Manager — Installer${NC}\n${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"; }
 
-title(){
-echo -e "${MAG}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${WHT}Marzban Backup Manager — Installer${NC}"
-echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+REPO_RAW="https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main"
+BIN="/usr/local/bin/mbm"
+TTY="/dev/tty"
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  else
+    if command -v sudo >/dev/null 2>&1; then
+      sudo -E "$@"
+    else
+      err "sudo not found. Run as root."
+      exit 1
+    fi
+  fi
 }
 
 title
+say "Installing to: ${BIN}"
 
-echo -e "${CYN}➜${NC} Installing to: /usr/local/bin/mbm"
+run_as_root mkdir -p /usr/local/bin
+run_as_root curl -fsSL "${REPO_RAW}/mbm" -o "${BIN}"
+run_as_root chmod +x "${BIN}"
+ok "Installed successfully"
 
-curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/mbm -o /usr/local/bin/mbm
-chmod +x /usr/local/bin/mbm
-
-echo -e "${GRN}✔ Installed successfully${NC}"
-
-if [ "$1" = "auto" ]; then
-    echo -e "\n${CYN}➜${NC} Starting setup...\n"
-    sleep 1
-    mbm install
+if [ "${1:-}" = "auto" ]; then
+  echo
+  say "Starting setup..."
+  echo
+  # Ensure interactive prompts always work
+  if [ -c "$TTY" ]; then
+    run_as_root bash -lc "mbm install" < "$TTY"
+  else
+    # fallback (rare)
+    run_as_root mbm install
+  fi
 fi
