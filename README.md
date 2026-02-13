@@ -1,3 +1,5 @@
+[🇮🇷 نسخه فارسی README](README_FA.md)
+
 # 🚀 Marzban Backup Manager (MBM)
 
 Professional Backup & Restore Manager for Marzban Panel  
