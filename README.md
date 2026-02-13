@@ -1,9 +1,12 @@
-[🇮🇷 نسخه فارسی README](README_FA.md)
+<div align="center">
 
 # 🚀 Marzban Backup Manager (MBM)
 
-Professional Backup & Restore Manager for Marzban Panel  
-Designed for Iran (Proxy Supported) & International Servers
+Professional Telegram Backup & Restore Manager for Marzban Panel
+
+### 🇮🇷 [مشاهده نسخه فارسی](README_FA.md)
+
+</div>
 
 ---
 
@@ -11,61 +14,41 @@ Designed for Iran (Proxy Supported) & International Servers
 
 - Full Marzban backup
 - Jalali (Shamsi) timestamped backups
-- Sends backup directly to Telegram
-- Auto-detect server IP
+- Telegram backup sending
+- Local IP detection (Iran-safe)
 - Optional SOCKS5 support
-- Minute-based cron schedule
+- Smart cron scheduling
 - One-command restore
 - Clean uninstall
-- Colored CLI interface
+- Versioning & update support
+- Status command
 
 ---
 
-## ⚡ Quick Install (One Line)
+## 📦 One-Line Installation
 
-    bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh) auto
-
----
-
-## 📌 After Installation
-
-Run:
-
-    mbm install
-
-You will be asked for:
-- Telegram Bot Token
-- Telegram Chat ID
-- SOCKS5 Proxy (optional)
-- Backup interval (minutes)
+bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
 
 ---
 
-## 🛠 Commands
+## 📖 Commands
 
-    mbm install
-    mbm backup
-    mbm restore FILE_PATH
-    mbm uninstall
-    mbm help
-
----
-
-## 📦 Backup Caption Example
-
-    📦 Backup Information
-    🌐 Server IP: 1.2.3.4
-    📁 Backup File: /opt/marzban/backup/backup_1404-11-24_16-00-01.tar.gz
-    ⏰ Backup Time: 1404-11-24 16:00:01
+mbm install  
+mbm backup  
+mbm restore <file>  
+mbm status  
+mbm version  
+mbm update  
+mbm uninstall  
+mbm help  
 
 ---
 
-## 🔐 Requirements
+## 📁 Backup Scope
 
-- Ubuntu / Debian
-- Marzban Installed
-- Root access
+- /var/lib/marzban  
+- /opt/marzban  
 
 ---
 
-If you like this project, give it a ⭐ on GitHub.
+Current Version: v1.1.0

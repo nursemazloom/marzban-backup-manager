@@ -291,7 +291,7 @@ FILE="$2"
 [ -n "$MARZBAN_BIN" ] || { err "marzban command not found (PATH issue)."; exit 1; }
 
 say "Stopping marzban..."; "$MARZBAN_BIN" down >/dev/null 2>&1 || true
-say "Extracting backup..."; tar -xzf "$FILE" -C /
+say "Extracting backup..."; tar -xzf "$FILE" -C / >/dev/null 2>&1
 say "Starting marzban..."; "$MARZBAN_BIN" up -n >/dev/null 2>&1 || true
 ok "Restore complete ✅"
 }
