@@ -18,7 +18,8 @@ say "Installing to: /usr/local/bin/mbm"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-install -m 755 "$SCRIPT_DIR/mbm" /usr/local/bin/mbm
+curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/mbm -o /usr/local/bin/mbm
+chmod +x /usr/local/bin/mbm
 
 ok "mbm installed ✅"
 say "Now run: mbm install"
