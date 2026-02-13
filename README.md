@@ -6,6 +6,10 @@ Professional Telegram Backup & Restore Manager for Marzban Panel
 
 ### 🇮🇷 [مشاهده نسخه فارسی](README_FA.md)
 
+```bash
+echo hello
+```
+
 </div>
 
 ---
