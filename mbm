@@ -301,17 +301,54 @@ ok "Backup completed and sent ✅"
 }
 
 
+
 cmd_restore(){
 ensure_deps
-FILE="$2"
-[ -f "$FILE" ] || { err "File not found: $FILE"; exit 1; }
-[ -n "$MARZBAN_BIN" ] || { err "marzban command not found (PATH issue)."; exit 1; }
+load_conf
 
-say "Stopping marzban..."; "$MARZBAN_BIN" down >/dev/null 2>&1 || true
-say "Extracting backup..."; tar -xzf "$FILE" -C / >/dev/null 2>&1
-say "Starting marzban..."; "$MARZBAN_BIN" up -n >/dev/null 2>&1 || true
-ok "Restore complete ✅"
+BACKUP_DIR="/opt/marzban-backup/backups"
+
+LATEST=$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -n1 || true)
+
+echo
+echo "Available latest backup:"
+echo "  $LATEST"
+echo
+echo "Enter backup file path to restore."
+echo "Press ENTER to restore latest backup."
+echo
+
+read -p "Backup path: " INPUT
+
+if [ -z "$INPUT" ]; then
+  FILE="$LATEST"
+else
+  FILE="$INPUT"
+fi
+
+[ -f "$FILE" ] || { err "Backup file not found."; exit 1; }
+
+echo
+warn "WARNING ⚠"
+echo "This will REPLACE your current Marzban data with:"
+echo "  $FILE"
+echo
+read -p "Type 'yes' to continue: " CONFIRM
+
+[ "$CONFIRM" = "yes" ] || { warn "Restore cancelled."; exit 0; }
+
+say "Stopping Marzban..."
+$MARZBAN_BIN down >/dev/null 2>&1 || true
+
+say "Restoring backup..."
+tar -xzf "$FILE" -C /
+
+say "Starting Marzban..."
+$MARZBAN_BIN up >/dev/null 2>&1 || true
+
+ok "Restore completed successfully ✅"
 }
+
 
 cmd_uninstall(){
 crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
