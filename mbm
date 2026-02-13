@@ -48,6 +48,48 @@ print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-
 PY
 }
 
+validate_proxy(){
+while true; do
+echo
+echo "SOCKS5 Proxy (optional)"
+echo "Format: socks5://127.0.0.1:1080"
+echo "Leave empty if not needed:"
+read INPUT
+
+if [ -z "$INPUT" ]; then
+PROXY=""
+return
+fi
+
+# اگر فقط ip:port داد
+if [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
+INPUT="socks5://$INPUT"
+fi
+
+# جلوگیری از http
+if [[ "$INPUT" =~ ^http ]]; then
+echo "Invalid format ❌ Only socks5 supported"
+continue
+fi
+
+# چک فرمت نهایی
+if [[ ! "$INPUT" =~ ^socks5:// ]]; then
+echo "Invalid format ❌"
+continue
+fi
+
+echo "Testing proxy connection..."
+if curl --proxy "$INPUT" -m 10 -s https://api.telegram.org >/dev/null; then
+echo "Proxy OK ✅"
+PROXY="$INPUT"
+return
+else
+echo "Proxy failed ❌ Try again."
+fi
+
+done
+}
+
 cmd_install(){
 install_deps
 
@@ -57,9 +99,9 @@ read TOKEN
 echo "Telegram Chat ID:"
 read CHAT_ID
 
-echo "SOCKS5 Proxy (optional, leave empty if none):"
-read PROXY
+validate_proxy
 
+echo
 echo "Backup interval (minutes):"
 read INTERVAL_MINUTES
 
