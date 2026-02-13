@@ -27,9 +27,53 @@ load_conf(){
 source "$CONF"
 }
 
+cron_expr_from_minutes(){
+# input: total minutes (>=1), output: cron schedule "m h dom mon dow"
+M="$1"
+if ! [[ "$M" =~ ^[0-9]+$ ]] || [ "$M" -lt 1 ]; then
+  echo ""
+  return
+fi
+
+if [ "$M" -lt 60 ]; then
+  echo "*/$M * * * *"
+  return
+fi
+
+H=$(( M / 60 ))
+R=$(( M % 60 ))
+
+# cap hours step to 23 to avoid cron weirdness
+# if H > 23, keep it daily-ish: run every H hours still ok in many cron impl, but safe fallback:
+# We'll keep it as */H (cron accepts >23 in hour field? some do, but better keep within 1..23)
+# If very large, convert to daily run at 00:00
+if [ "$H" -ge 24 ] && [ "$R" -eq 0 ]; then
+  echo "0 0 */$((H/24)) * *"
+  return
+fi
+
+if [ "$H" -ge 24 ] && [ "$R" -ne 0 ]; then
+  # fallback: run daily at 00:00 plus minute step R
+  # (still no error)
+  echo "*/$R 0 */$((H/24)) * *"
+  return
+fi
+
+if [ "$R" -eq 0 ]; then
+  echo "0 */$H * * *"
+else
+  # Note: cron can't express "every 90 minutes" perfectly; this is an approximation but never errors.
+  echo "*/$R */$H * * *"
+fi
+}
+
 setup_cron(){
+expr="$(cron_expr_from_minutes "$INTERVAL_MINUTES")"
+[ -n "$expr" ] || { echo "Invalid interval"; exit 1; }
+
 crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
-(crontab -l 2>/dev/null; echo "*/$INTERVAL_MINUTES * * * * /usr/local/bin/mbm backup >/dev/null 2>&1 $CRON_TAG") | crontab -
+(crontab -l 2>/dev/null; echo "$expr /usr/local/bin/mbm backup >/dev/null 2>&1 $CRON_TAG") | crontab -
+echo "Cron set: $expr"
 }
 
 jalali_stamp(){
@@ -49,7 +93,6 @@ PY
 }
 
 proxy_try(){
-# returns 0 if works
 local p="$1"
 curl --proxy "$p" -I -s --max-time 10 https://api.telegram.org >/dev/null 2>&1
 }
@@ -70,33 +113,25 @@ while true; do
     return
   fi
 
-  # block http/https
   if [[ "$INPUT" =~ ^http ]]; then
     echo "Invalid format ❌ Only socks5/socks5h supported"
     continue
   fi
 
-  local base=""
-  local c1="" c2=""
-
-  # ip:port only
+  base=""
   if [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then
     base="$INPUT"
-    c1="socks5h://$base"
-    c2="socks5://$base"
   elif [[ "$INPUT" =~ ^socks5h:// ]]; then
     base="${INPUT#socks5h://}"
-    c1="socks5h://$base"
-    c2="socks5://$base"
   elif [[ "$INPUT" =~ ^socks5:// ]]; then
     base="${INPUT#socks5://}"
-    # prefer socks5h first even if user typed socks5
-    c1="socks5h://$base"
-    c2="socks5://$base"
   else
     echo "Invalid format ❌"
     continue
   fi
+
+  c1="socks5h://$base"
+  c2="socks5://$base"
 
   echo "Testing proxy (1/2): $c1"
   if proxy_try "$c1"; then
