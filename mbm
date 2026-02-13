@@ -1,6 +1,24 @@
 #!/usr/bin/env bash
 set -e
 
+
+get_server_ip() {
+  local ip=""
+
+  # 1) Local (no internet)
+  ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  [ -n "$ip" ] && { echo "$ip"; return 0; }
+
+  # 2) Fallback local
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$ip" ] && { echo "$ip"; return 0; }
+
+  # 3) Last resort (internet - short timeout)
+  ip="$(curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null || true)"
+  echo "${ip:-unknown}"
+}
+
+
 # ===== Paths (NO cwd dependency) =====
 APP_DIR="/opt/marzban-backup"
 CONF="$APP_DIR/config.conf"
@@ -253,7 +271,7 @@ NEW="$DIR/backup_${STAMP}.tar.gz"
 mv -f "$LATEST" "$NEW"
 
 CAPTION="📦 Backup Information
-🌐 Server IP: $(hostname -I | awk '{print $1}')
+🌐 Server IP: $(get_server_ip)
 📁 Backup File: $NEW
 ⏰ Backup Time: $HUMAN"
 
