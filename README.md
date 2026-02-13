@@ -31,8 +31,9 @@ echo hello
 
 ## 📦 One-Line Installation
 
+```bash
 bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
-
+```
 ---
 
 ## 📖 Commands
