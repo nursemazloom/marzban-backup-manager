@@ -30,6 +30,15 @@ title
 say "Installing to: ${BIN}"
 
 run_as_root mkdir -p /usr/local/bin
+
+# --- MBM_DEP_INSTALL (required tools for mbm) ---
+run_as_root bash -lc '
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y tar gzip iproute2 ca-certificates >/dev/null 2>&1 || true
+' || true
+# --- /MBM_DEP_INSTALL ---
+
 run_as_root curl -fsSL "${REPO_RAW}/mbm" -o "${BIN}"
 run_as_root chmod +x "${BIN}"
 ok "Installed successfully"
