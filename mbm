@@ -302,10 +302,6 @@ else
 fi
 
 
-# --- Retention: keep only last 2 backups ---
-BACKUP_DIR="/opt/marzban-backup/backups"
-ls -t "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
-# --- /Retention ---
 
 
 # cleanup old backups
