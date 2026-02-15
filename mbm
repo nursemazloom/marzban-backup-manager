@@ -114,6 +114,7 @@ TOKEN="$TOKEN"
 CHAT_ID="$CHAT_ID"
 PROXY="$PROXY"
 INTERVAL_MINUTES="$INTERVAL_MINUTES"
+MAX_BACKUPS="$MAX_BACKUPS"
 CFG
 chmod 600 "$CONF"
 }
@@ -252,6 +253,7 @@ echo -e "${CYN}Telegram Bot Token:${NC}"; read TOKEN
 echo -e "${CYN}Telegram Chat ID:${NC}"; read CHAT_ID
 validate_proxy
 echo -e "${CYN}\nBackup interval (minutes):${NC}"; read INTERVAL_MINUTES
+echo -e "${CYN}Max backups to keep:${NC}"; read MAX_BACKUPS
 save_conf
 setup_cron
 ok "Installed successfully ✅"
@@ -297,6 +299,23 @@ if [ -n "${PROXY:-}" ]; then
   curl --proxy "$PROXY" -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$FINAL" "$API" >/dev/null
 else
   curl -F chat_id="$CHAT_ID" -F caption="$CAPTION" -F document=@"$FINAL" "$API" >/dev/null
+fi
+
+
+# --- Retention: keep only last 2 backups ---
+BACKUP_DIR="/opt/marzban-backup/backups"
+ls -t "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | tail -n +3 | xargs -r rm -f
+# --- /Retention ---
+
+
+# cleanup old backups
+if [ -n "$MAX_BACKUPS" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
+  COUNT=$(ls -1 "$OUT_DIR"/backup_*.tar.gz 2>/dev/null | wc -l)
+  if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
+    REMOVE=$((COUNT - MAX_BACKUPS))
+    ls -1t "$OUT_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs -r rm -f
+    say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
+  fi
 fi
 
 ok "Backup completed and sent ✅"
