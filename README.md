@@ -27,7 +27,7 @@ Professional Telegram Backup & Restore Manager for Marzban Panel
 
 ## 📦 One-Line Installation
 
-    bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
+    bash <(curl -fsSL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
 
 ---
 
