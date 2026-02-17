@@ -506,10 +506,27 @@ cmd_uninstall(){
 # ============================================================
 self_install(){
   title "Installing Marzban Backup Manager v${VERSION}"
-  say "Copying mbm to /usr/local/bin/mbm ..."
-  install -m 755 "$SCRIPT_PATH" /usr/local/bin/mbm
+  say "Installing from current script (pipe-safe)..."
+
+  local src tmp
+  src="${BASH_SOURCE[0]:-$0}"
+  tmp="$(mktemp)"
+
+  if [ -r "$src" ]; then
+    cat "$src" > "$tmp" || { err "Failed to read current script"; rm -f "$tmp"; exit 1; }
+  else
+    err "Cannot read current script source ($src)."
+    err "Run via: bash <(curl -fsSL .../install.sh) or download file first."
+    rm -f "$tmp"
+    exit 1
+  fi
+
+  install -m 755 "$tmp" /usr/local/bin/mbm
+  rm -f "$tmp"
+
   mkdir -p "$APP_DIR"
   echo "$VERSION" > "$APP_DIR/VERSION" || true
+
   ok "Binary installed at /usr/local/bin/mbm"
   echo
   /usr/local/bin/mbm install
