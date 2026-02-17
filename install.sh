@@ -425,6 +425,8 @@ trap start_back EXIT
 # Create archive (ignore harmless file-changed warnings if any)
 set +e
 tar -czf "$TMP" -C / \
+  --warning=no-file-changed \
+
   --exclude='opt/marzban/backup' \
   --exclude='opt/marzban/backup/*' \
   --exclude='var/lib/marzban/xray-core' \
