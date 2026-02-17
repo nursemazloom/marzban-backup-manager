@@ -304,7 +304,8 @@ cmd_update(){
   install -m 755 "$tmp" /usr/local/bin/mbm
   rm -f "$tmp"
 
-  ok "Updated to $(/usr/local/bin/mbm version | tr -d '')"
+  ok "Updated to $(/usr/local/bin/mbm version | tr -d '
+')"
 }
 
 
@@ -526,12 +527,14 @@ case "${1:-}" in
   update)    cmd_update ;;
   uninstall) cmd_uninstall ;;
   help)      help ;;
-  "")
-    if [[ "$(basename "$0")" == "install.sh" ]]; then
-      self_install
-    else
-      help
-    fi
-    ;;
+  "" )
+# If mbm is not installed yet → run self installer
+if [ ! -x /usr/local/bin/mbm ]; then
+  self_install
+else
+  help
+fi
+;;
+
   *) help ;;
 esac
