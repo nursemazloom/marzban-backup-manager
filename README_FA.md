@@ -27,7 +27,7 @@
 
 ## 📦 نصب با یک دستور
 
-    bash <(curl -sL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
+    bash <(curl -fsSL https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh)
 
 ---
 
