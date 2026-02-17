@@ -297,13 +297,16 @@ cmd_update(){
   say "Updating mbm from GitHub..."
   local tmp
   tmp="$(mktemp)"
-  curl -fsSL "$REPO_RAW_BASE/install.sh" -o "$tmp" || { err "Download failed"; rm -f "$tmp"; exit 1; }
+
+  curl -fsSL "$REPO_RAW_BASE/install.sh" -o "$tmp" \
+    || { err "Download failed"; rm -f "$tmp"; exit 1; }
+
   install -m 755 "$tmp" /usr/local/bin/mbm
-  mkdir -p "$APP_DIR"
-  echo "$VERSION" > "$APP_DIR/VERSION" || true
   rm -f "$tmp"
-  ok "Updated to $(/usr/local/bin/mbm version | tr -d '\r')"
+
+  ok "Updated to $(/usr/local/bin/mbm version | tr -d '')"
 }
+
 
 # ============================================================
 # INSTALL
