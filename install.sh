@@ -390,64 +390,91 @@ cmd_install(){
 }
 
 cmd_backup(){
-  ensure_deps
-  load_conf
+ensure_deps
+load_conf
 
-  mkdir -p "$BACKUP_DIR"
+[ -z "$MARZBAN_BIN" ] && { err "marzban command not found."; exit 1; }
 
-  local STAMP HUMAN FINAL
-  STAMP="$(jalali_stamp)"
-  HUMAN="$(jalali_human)"
-  FINAL="$BACKUP_DIR/backup_${STAMP}.tar.gz"
+local OUT_DIR="/opt/marzban-backup/backups"
+mkdir -p "$OUT_DIR"
 
-  say "Creating full backup (path-preserving)..."
-  say "Includes: /opt/marzban  +  /var/lib/marzban"
-  warn "Excluding: /opt/marzban/backup  and  /var/lib/marzban/xray-core"
+local STAMP HUMAN FINAL TMP
+STAMP=$(jalali_stamp)
+HUMAN=$(jalali_human)
+FINAL="$OUT_DIR/backup_${STAMP}.tar.gz"
+TMP="$(mktemp -p "$OUT_DIR" "backup_${STAMP}.XXXXXX.tar.gz")"
 
-  # Create archive
-  if ! tar -czf "$FINAL" -C / \
-    --exclude='opt/marzban/backup' \
-    --exclude='opt/marzban/backup/*' \
-    --exclude='var/lib/marzban/xray-core' \
-    --exclude='var/lib/marzban/xray-core/*' \
-    opt/marzban var/lib/marzban; then
-    err "Failed to create backup archive."
-    exit 1
-  fi
+say "Creating full backup (path-preserving)..."
+say "Includes: /opt/marzban  +  /var/lib/marzban"
+warn "Excluding: /opt/marzban/backup  and  /var/lib/marzban/xray-core"
 
-  local SIZE
-  SIZE="$(du -sh "$FINAL" 2>/dev/null | cut -f1 || echo "?")"
-  ok "Backup created: $FINAL ($SIZE)"
+# Stop marzban briefly to avoid sqlite changing during tar
+say "Stopping Marzban (safe snapshot)..."
+"$MARZBAN_BIN" down >/dev/null 2>&1 || true
 
-  local CAPTION
-  CAPTION="📦 Backup Information
+# Always try to start marzban back even if something fails
+start_back(){
+  say "Starting Marzban..."
+  "$MARZBAN_BIN" restart -n >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" restart    >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" up -n      >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" up         >/dev/null 2>&1 || true
+}
+trap start_back EXIT
+
+# Create archive (ignore harmless file-changed warnings if any)
+set +e
+tar -czf "$TMP" -C / \
+  --exclude='opt/marzban/backup' \
+  --exclude='opt/marzban/backup/*' \
+  --exclude='var/lib/marzban/xray-core' \
+  --exclude='var/lib/marzban/xray-core/*' \
+  opt/marzban var/lib/marzban
+rc=$?
+set -e
+
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 1 ]; then
+  rm -f "$TMP" >/dev/null 2>&1 || true
+  err "Failed to create backup archive (tar exit: $rc)."
+  exit 1
+fi
+
+mv -f "$TMP" "$FINAL"
+
+local SIZE
+SIZE=$(du -sh "$FINAL" 2>/dev/null | awk '{print $1}')
+ok "Backup created: $FINAL (${SIZE:-?})"
+
+local CAPTION
+CAPTION="📦 Backup Information
 🌐 Server IP: $(get_server_ip)
 📁 Backup File: $FINAL
-💾 Size: $SIZE
+💾 Size: ${SIZE:-?}
 ⏰ Backup Time: $HUMAN"
 
-  say "Sending to Telegram..."
-  if ! telegram_send "$CHAT_ID" "$CAPTION" "$FINAL"; then
-    echo "$(date): FAILED to send $FINAL ($SIZE)" >> "$CRON_LOG" 2>/dev/null || true
-    err "Backup kept locally at: $FINAL"
-    exit 1
-  fi
-
-  echo "$(date): OK — $FINAL ($SIZE)" >> "$CRON_LOG" 2>/dev/null || true
-
-  # Retention
-  if [ -n "${MAX_BACKUPS:-}" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
-    local COUNT REMOVE
-    COUNT="$(ls -1 "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | wc -l | tr -d ' ' || echo 0)"
-    if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
-      REMOVE=$(( COUNT - MAX_BACKUPS ))
-      ls -1t "$BACKUP_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs -r rm -f
-      say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
-    fi
-  fi
-
-  ok "Backup completed and sent ✅"
+say "Sending to Telegram..."
+telegram_send "$CHAT_ID" "$CAPTION" "$FINAL" || {
+  err "Backup file kept locally at: $FINAL"
+  echo "$(date): FAILED to send $FINAL (${SIZE:-?})" >> "$APP_DIR/cron.log"
+  exit 1
 }
+
+echo "$(date): OK — $FINAL (${SIZE:-?})" >> "$APP_DIR/cron.log"
+
+# cleanup old backups
+if [ -n "$MAX_BACKUPS" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
+  local COUNT REMOVE
+  COUNT=$(ls -1 "$OUT_DIR"/backup_*.tar.gz 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
+    REMOVE=$(( COUNT - MAX_BACKUPS ))
+    ls -1t "$OUT_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs -r rm -f
+    say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
+  fi
+fi
+
+ok "Backup completed and sent ✅"
+}
+
 
 cmd_restore(){
   ensure_deps
