@@ -1,605 +1,543 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# ============================================================
+# Marzban Backup Manager (MBM)
+# Single-file: installer + mbm binary
+# Version: 1.1.0
+# ============================================================
+set -e
 
-VERSION="1.2.4"
+VERSION="1.1.1"
 
+# ===== Paths =====
 APP_DIR="/opt/marzban-backup"
-BACKUP_DIR="$APP_DIR/backups"
-CONFIG_FILE="$APP_DIR/config.conf"
-BIN_PATH="/usr/local/bin/mbm"
+CONF="$APP_DIR/config.conf"
+CRON_TAG="# mbm-backup"
+REPO_RAW_BASE="https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main"
 
-RED='\033[0;31m'
-GRN='\033[0;32m'
-YLW='\033[1;33m'
-CYN='\033[0;36m'
-NC='\033[0m'
+SCRIPT_PATH="$(readlink -f "$0" 2>/dev/null || echo "$0")"
 
-say(){ echo -e "${CYN}➜ $*${NC}"; }
-ok(){ echo -e "${GRN}✔ $*${NC}"; }
-warn(){ echo -e "${YLW}⚠ $*${NC}"; }
-err(){ echo -e "${RED}✖ $*${NC}"; }
+# ===== Colors =====
+RED='\033[0;31m'; GRN='\033[0;32m'; YLW='\033[0;33m'; CYN='\033[0;36m'
+MAG='\033[0;35m'; WHT='\033[1;37m'; NC='\033[0m'
+say(){  echo -e "${CYN}➜${NC} $*"; }
+ok(){   echo -e "${GRN}✔${NC} $*"; }
+warn(){ echo -e "${YLW}⚠${NC} $*"; }
+err(){  echo -e "${RED}✖${NC} $*"; }
 
-mkdir -p "$APP_DIR" "$BACKUP_DIR"
-
-load_config() {
-  [ -f "$CONFIG_FILE" ] && source "$CONFIG_FILE"
+title(){
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${WHT}$*${NC}"
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 }
 
-save_config() {
-cat > "$CONFIG_FILE" <<EOF
-TELEGRAM_ENABLED="$TELEGRAM_ENABLED"
-BALE_ENABLED="$BALE_ENABLED"
-RUBIKA_ENABLED="$RUBIKA_ENABLED"
-ARVAN_ENABLED="$ARVAN_ENABLED"
+# ===== marzban binary (robust) =====
+MARZBAN_BIN="$(command -v marzban 2>/dev/null || true)"
+[ -z "$MARZBAN_BIN" ] && [ -x /usr/local/bin/marzban ] && MARZBAN_BIN="/usr/local/bin/marzban"
+[ -z "$MARZBAN_BIN" ] && [ -x /usr/bin/marzban ] && MARZBAN_BIN="/usr/bin/marzban"
 
-TELEGRAM_TOKEN="$TELEGRAM_TOKEN"
-TELEGRAM_CHAT_ID="$TELEGRAM_CHAT_ID"
+# ============================================================
+# HELP
+# ============================================================
+help(){
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${WHT}Marzban Backup Manager (mbm)${NC}  ${YLW}v${VERSION}${NC}"
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${CYN}Usage:${NC}  mbm <command>\n"
+  echo -e "${YLW}Commands:${NC}"
+  printf "  ${WHT}%-12s${NC} | %s\n" "install"   "Setup Telegram + Proxy + Schedule (runs first backup)"
+  printf "  ${WHT}%-12s${NC} | %s\n" "backup"    "Create backup now and send to Telegram"
+  printf "  ${WHT}%-12s${NC} | %s\n" "restore"   "Interactive restore (asks backup path and confirmation)"
+  printf "  ${WHT}%-12s${NC} | %s\n" "status"    "Show mbm + cron + last backup status"
+  printf "  ${WHT}%-12s${NC} | %s\n" "version"   "Show version"
+  printf "  ${WHT}%-12s${NC} | %s\n" "update"    "Update mbm from GitHub (keeps config)"
+  printf "  ${WHT}%-12s${NC} | %s\n" "uninstall" "Remove mbm + cron + config"
+  printf "  ${WHT}%-12s${NC} | %s\n" "help"      "Show this help"
+  echo
+  echo -e "${YLW}Proxy formats (optional):${NC}"
+  echo -e "  socks5h://127.0.0.1:1080   (recommended for Iran)"
+  echo -e "  socks5://127.0.0.1:1080"
+  echo -e "  or just: 127.0.0.1:1080"
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+}
 
-BALE_TOKEN="$BALE_TOKEN"
-BALE_CHAT_ID="$BALE_CHAT_ID"
+# ============================================================
+# SERVER IP
+# ============================================================
+get_server_ip() {
+  local ip=""
+  ip="$(ip route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+  [ -n "$ip" ] && { echo "$ip"; return 0; }
+  ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  [ -n "$ip" ] && { echo "$ip"; return 0; }
+  ip="$(curl -fsS --max-time 3 https://api.ipify.org 2>/dev/null || true)"
+  echo "${ip:-unknown}"
+}
 
-RUBIKA_TOKEN="$RUBIKA_TOKEN"
-RUBIKA_CHAT_ID="$RUBIKA_CHAT_ID"
+# ============================================================
+# DEPENDENCIES
+# ============================================================
+install_deps(){
+  say "Installing dependencies..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt-get update -y >/dev/null 2>&1 || true
+  apt-get install -y curl cron python3 python3-pip tar gzip iproute2 ca-certificates >/dev/null 2>&1 || true
+  systemctl enable --now cron >/dev/null 2>&1 || true
 
-ARVAN_ENDPOINT="$ARVAN_ENDPOINT"
-ARVAN_BUCKET="$ARVAN_BUCKET"
-ARVAN_ACCESS_KEY="$ARVAN_ACCESS_KEY"
-ARVAN_SECRET_KEY="$ARVAN_SECRET_KEY"
-ARVAN_REGION="$ARVAN_REGION"
-ARVAN_PATH="$ARVAN_PATH"
+  python3 -c "import jdatetime" >/dev/null 2>&1 && { ok "jdatetime already available"; return; }
 
+  apt-get install -y python3-jdatetime >/dev/null 2>&1 || true
+  python3 -c "import jdatetime" >/dev/null 2>&1 && { ok "Installed jdatetime via apt"; return; }
+
+  python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+  python3 -m pip install -q jdatetime --break-system-packages >/dev/null 2>&1 || \
+  python3 -m pip install -q --user jdatetime >/dev/null 2>&1 || true
+
+  python3 -c "import jdatetime" >/dev/null 2>&1 && ok "Installed jdatetime via pip" || \
+  warn "Could not auto-install jdatetime — Jalali timestamps may not work"
+}
+
+ensure_deps(){
+  mkdir -p "$APP_DIR/backups"
+  command -v curl >/dev/null 2>&1 || install_deps
+  command -v python3 >/dev/null 2>&1 || install_deps
+  command -v tar >/dev/null 2>&1 || install_deps
+  python3 -c "import jdatetime" >/dev/null 2>&1 || install_deps
+}
+
+# ============================================================
+# CONFIG
+# ============================================================
+save_conf(){
+  mkdir -p "$APP_DIR"
+  cat > "$CONF" <<CFG
+TOKEN="$TOKEN"
+CHAT_ID="$CHAT_ID"
+PROXY="$PROXY"
+INTERVAL_MINUTES="$INTERVAL_MINUTES"
 MAX_BACKUPS="$MAX_BACKUPS"
-CRON_SCHEDULE="$CRON_SCHEDULE"
-EOF
-ok "Config saved: $CONFIG_FILE"
+CFG
+  chmod 600 "$CONF"
 }
 
-telegram_send() {
-  local caption="$1"
-  local file="$2"
+load_conf(){
+  [ -f "$CONF" ] || { err "Not installed. Run: mbm install"; exit 1; }
+  # shellcheck disable=SC1090
+  source "$CONF"
+}
 
-  RESPONSE=$(curl -s -X POST \
-    "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendDocument" \
-    -F chat_id="$TELEGRAM_CHAT_ID" \
-    -F caption="$caption" \
-    -F document=@"$file")
+# ============================================================
+# CRON  (>= 60 min => whole hours)
+# ============================================================
+cron_expr_from_minutes(){
+  local M="$1"
+  if ! [[ "$M" =~ ^[0-9]+$ ]] || [ "$M" -lt 1 ]; then echo ""; return; fi
+  if [ "$M" -lt 60 ]; then echo "*/$M * * * *"; return; fi
 
-  if echo "$RESPONSE" | grep -q '"ok":true'; then
-    ok "Telegram: sent successfully ✅"
+  local H=$(( M / 60 ))
+  local R=$(( M % 60 ))
+  if [ "$R" -ne 0 ]; then
+    warn "Interval $M min is not a multiple of 60. Rounding to ${H}h ($((H*60)) min)."
+  fi
+  if [ "$H" -lt 1 ]; then H=1; fi
+
+  if [ "$H" -ge 24 ]; then
+    local D=$(( H / 24 ))
+    [ "$D" -lt 1 ] && D=1
+    echo "0 0 */$D * *"
   else
-    err "Telegram send FAILED!"
-    err "Response: $RESPONSE"
-    FAIL_COUNT=$((FAIL_COUNT+1))
+    echo "0 */$H * * *"
   fi
 }
 
-bale_send() {
-  local caption="$1"
-  local file="$2"
+setup_cron(){
+  local expr
+  expr="$(cron_expr_from_minutes "$INTERVAL_MINUTES")"
+  [ -n "$expr" ] || { err "Invalid interval. Enter minutes >= 1"; exit 1; }
 
-  RESPONSE=$(curl -s -X POST \
-    "https://tapi.bale.ai/bot${BALE_TOKEN}/sendDocument" \
-    -F chat_id="$BALE_CHAT_ID" \
-    -F caption="$caption" \
-    -F document=@"$file")
-
-  if echo "$RESPONSE" | grep -q '"ok":true'; then
-    ok "Bale: sent successfully ✅"
-  else
-    err "Bale send FAILED!"
-    err "Response: $RESPONSE"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-  fi
+  crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+  ( crontab -l 2>/dev/null; echo "$expr /usr/local/bin/mbm backup >>$APP_DIR/cron.log 2>&1 $CRON_TAG" ) | crontab -
+  ok "Cron set: $expr"
 }
 
-rubika_send() {
-  local file="$1"
-
-  RESPONSE=$(curl -s -X POST \
-    "https://messengerg2c56.iranlms.ir/" \
-    -F token="$RUBIKA_TOKEN" \
-    -F chat_id="$RUBIKA_CHAT_ID" \
-    -F file=@"$file")
-
-  if echo "$RESPONSE" | grep -q '"ok":true'; then
-    ok "Rubika: sent successfully ✅"
-  else
-    err "Rubika file upload FAILED!"
-    err "Response: $RESPONSE"
-    FAIL_COUNT=$((FAIL_COUNT+1))
-  fi
-}
-
-arvan_upload() {
-  local file="$1"
-  local filename
-  filename=$(basename "$file")
-
-  local key="${ARVAN_PATH}/${filename}"
-
-PYTHONWARNINGS=ignore python3 <<PY
-import requests
+# ============================================================
+# JALALI TIMESTAMP
+# ============================================================
+jalali_stamp(){
+  python3 - <<'PY'
 from datetime import datetime
-import hashlib, hmac
-
-access_key = "$ARVAN_ACCESS_KEY"
-secret_key = "$ARVAN_SECRET_KEY"
-bucket = "$ARVAN_BUCKET"
-endpoint = "$ARVAN_ENDPOINT".replace("https://","").replace("http://","")
-region = "$ARVAN_REGION" or "auto"
-service = "s3"
-key = "$key"
-file_path = "$file"
-host = endpoint
-
-t = datetime.utcnow()
-amzdate = t.strftime('%Y%m%dT%H%M%SZ')
-datestamp = t.strftime('%Y%m%d')
-
-with open(file_path, "rb") as f:
-    payload = f.read()
-
-payload_hash = hashlib.sha256(payload).hexdigest()
-canonical_uri = f"/{bucket}/{key}"
-
-canonical_headers = (
-    f"host:{host}\\n"
-    f"x-amz-content-sha256:{payload_hash}\\n"
-    f"x-amz-date:{amzdate}\\n"
-)
-
-signed_headers = "host;x-amz-content-sha256;x-amz-date"
-
-canonical_request = (
-    "PUT\\n" +
-    canonical_uri + "\\n\\n" +
-    canonical_headers + "\\n" +
-    signed_headers + "\\n" +
-    payload_hash
-)
-
-algorithm = "AWS4-HMAC-SHA256"
-credential_scope = f"{datestamp}/{region}/{service}/aws4_request"
-
-string_to_sign = (
-    algorithm + "\\n" +
-    amzdate + "\\n" +
-    credential_scope + "\\n" +
-    hashlib.sha256(canonical_request.encode()).hexdigest()
-)
-
-def sign(key, msg):
-    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
-
-kDate = sign(("AWS4" + secret_key).encode(), datestamp)
-kRegion = sign(kDate, region)
-kService = sign(kRegion, service)
-kSigning = sign(kService, "aws4_request")
-
-signature = hmac.new(kSigning, string_to_sign.encode(), hashlib.sha256).hexdigest()
-
-authorization_header = (
-    f"{algorithm} "
-    f"Credential={access_key}/{credential_scope}, "
-    f"SignedHeaders={signed_headers}, "
-    f"Signature={signature}"
-)
-
-url = f"https://{host}/{bucket}/{key}"
-
-headers = {
-    "x-amz-content-sha256": payload_hash,
-    "x-amz-date": amzdate,
-    "Authorization": authorization_header
-}
-
-r = requests.put(url, headers=headers, data=payload)
-print(r.status_code)
-
-if r.status_code not in (200, 201):
-    print(r.text)
-    raise SystemExit(1)
+import jdatetime
+print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-%d_%H-%M-%S"))
 PY
-
-  ok "Arvan: uploaded to s3://$ARVAN_BUCKET/$key ✅"
-
-  arvan_cleanup
 }
 
-arvan_cleanup() {
-  if [ -z "${MAX_BACKUPS:-}" ] || ! [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] || [ "$MAX_BACKUPS" -le 0 ]; then
-    return 0
-  fi
-
-  LIST=$(PYTHONWARNINGS=ignore python3 <<PY
-import requests
+jalali_human(){
+  python3 - <<'PY'
 from datetime import datetime
-import hashlib, hmac
-
-access_key = "$ARVAN_ACCESS_KEY"
-secret_key = "$ARVAN_SECRET_KEY"
-bucket = "$ARVAN_BUCKET"
-endpoint = "$ARVAN_ENDPOINT".replace("https://","").replace("http://","")
-region = "$ARVAN_REGION" or "auto"
-service = "s3"
-host = endpoint
-
-t = datetime.utcnow()
-amzdate = t.strftime('%Y%m%dT%H%M%SZ')
-datestamp = t.strftime('%Y%m%d')
-
-payload_hash = hashlib.sha256(b'').hexdigest()
-canonical_uri = f"/{bucket}"
-canonical_querystring = "list-type=2"
-
-canonical_headers = (
-    f"host:{host}\\n"
-    f"x-amz-content-sha256:{payload_hash}\\n"
-    f"x-amz-date:{amzdate}\\n"
-)
-
-signed_headers = "host;x-amz-content-sha256;x-amz-date"
-
-canonical_request = (
-    "GET\\n" +
-    canonical_uri + "\\n" +
-    canonical_querystring + "\\n" +
-    canonical_headers + "\\n" +
-    signed_headers + "\\n" +
-    payload_hash
-)
-
-algorithm = "AWS4-HMAC-SHA256"
-credential_scope = f"{datestamp}/{region}/{service}/aws4_request"
-
-string_to_sign = (
-    algorithm + "\\n" +
-    amzdate + "\\n" +
-    credential_scope + "\\n" +
-    hashlib.sha256(canonical_request.encode()).hexdigest()
-)
-
-def sign(key, msg):
-    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
-
-kDate = sign(("AWS4" + secret_key).encode(), datestamp)
-kRegion = sign(kDate, region)
-kService = sign(kRegion, service)
-kSigning = sign(kService, "aws4_request")
-
-signature = hmac.new(kSigning, string_to_sign.encode(), hashlib.sha256).hexdigest()
-
-authorization_header = (
-    f"{algorithm} "
-    f"Credential={access_key}/{credential_scope}, "
-    f"SignedHeaders={signed_headers}, "
-    f"Signature={signature}"
-)
-
-url = f"https://{host}/{bucket}?{canonical_querystring}"
-
-headers = {
-    "x-amz-content-sha256": payload_hash,
-    "x-amz-date": amzdate,
-    "Authorization": authorization_header
+import jdatetime
+print(jdatetime.datetime.fromgregorian(datetime=datetime.now()).strftime("%Y-%m-%d %H:%M:%S"))
+PY
 }
 
-r = requests.get(url, headers=headers)
-print(r.text)
-PY
-)
-
-  KEYS=$(echo "$LIST" | grep -oP '(?<=<Key>).*?(?=</Key>)' | grep "^${ARVAN_PATH}/backup_" | sort || true)
-  COUNT=$(echo "$KEYS" | grep -c . || true)
-
-  if [ "$COUNT" -le "$MAX_BACKUPS" ]; then
-    return 0
-  fi
-
-  REMOVE=$((COUNT - MAX_BACKUPS))
-
-  echo "$KEYS" | head -n "$REMOVE" | while read -r OLDKEY; do
-    [ -z "$OLDKEY" ] && continue
-
-PYTHONWARNINGS=ignore python3 <<PY
-import requests
-from datetime import datetime
-import hashlib, hmac
-
-access_key = "$ARVAN_ACCESS_KEY"
-secret_key = "$ARVAN_SECRET_KEY"
-bucket = "$ARVAN_BUCKET"
-endpoint = "$ARVAN_ENDPOINT".replace("https://","").replace("http://","")
-region = "$ARVAN_REGION" or "auto"
-service = "s3"
-key = "$OLDKEY"
-host = endpoint
-
-t = datetime.utcnow()
-amzdate = t.strftime('%Y%m%dT%H%M%SZ')
-datestamp = t.strftime('%Y%m%d')
-
-payload_hash = hashlib.sha256(b'').hexdigest()
-canonical_uri = f"/{bucket}/{key}"
-
-canonical_headers = (
-    f"host:{host}\\n"
-    f"x-amz-content-sha256:{payload_hash}\\n"
-    f"x-amz-date:{amzdate}\\n"
-)
-
-signed_headers = "host;x-amz-content-sha256;x-amz-date"
-
-canonical_request = (
-    "DELETE\\n" +
-    canonical_uri + "\\n\\n" +
-    canonical_headers + "\\n" +
-    signed_headers + "\\n" +
-    payload_hash
-)
-
-algorithm = "AWS4-HMAC-SHA256"
-credential_scope = f"{datestamp}/{region}/{service}/aws4_request"
-
-string_to_sign = (
-    algorithm + "\\n" +
-    amzdate + "\\n" +
-    credential_scope + "\\n" +
-    hashlib.sha256(canonical_request.encode()).hexdigest()
-)
-
-def sign(key, msg):
-    return hmac.new(key, msg.encode(), hashlib.sha256).digest()
-
-kDate = sign(("AWS4" + secret_key).encode(), datestamp)
-kRegion = sign(kDate, region)
-kService = sign(kRegion, service)
-kSigning = sign(kService, "aws4_request")
-
-signature = hmac.new(kSigning, string_to_sign.encode(), hashlib.sha256).hexdigest()
-
-authorization_header = (
-    f"{algorithm} "
-    f"Credential={access_key}/{credential_scope}, "
-    f"SignedHeaders={signed_headers}, "
-    f"Signature={signature}"
-)
-
-url = f"https://{host}/{bucket}/{key}"
-
-headers = {
-    "x-amz-content-sha256": payload_hash,
-    "x-amz-date": amzdate,
-    "Authorization": authorization_header
+# ============================================================
+# PROXY
+# ============================================================
+proxy_try(){
+  local p="$1"
+  curl --proxy "$p" -I -s --max-time 10 https://api.telegram.org >/dev/null 2>&1
 }
 
-r = requests.delete(url, headers=headers)
+validate_proxy(){
+  while true; do
+    echo
+    echo -e "${WHT}SOCKS5 Proxy (optional)${NC}"
+    echo "Formats:"
+    echo "  socks5h://127.0.0.1:1080"
+    echo "  socks5://127.0.0.1:1080"
+    echo "  127.0.0.1:1080"
+    echo "Leave empty if not needed:"
+    read -r INPUT
 
-if r.status_code not in (200, 202, 204):
-    print(f"DELETE_FAILED {r.status_code} {r.text}")
-    raise SystemExit(1)
-PY
+    if [ -z "$INPUT" ]; then PROXY=""; return; fi
+    if [[ "$INPUT" =~ ^http ]]; then err "Invalid format (only socks5/socks5h)"; continue; fi
 
-    say "Deleted old Arvan backup: $OLDKEY"
+    local base=""
+    if   [[ "$INPUT" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:[0-9]+$ ]]; then base="$INPUT"
+    elif [[ "$INPUT" =~ ^socks5h:// ]]; then base="${INPUT#socks5h://}"
+    elif [[ "$INPUT" =~ ^socks5:// ]]; then base="${INPUT#socks5://}"
+    else err "Invalid format."; continue
+    fi
+
+    local c1="socks5h://$base" c2="socks5://$base"
+    say "Testing proxy (1/2): $c1"
+    if proxy_try "$c1"; then ok "Proxy OK. Using: $c1"; PROXY="$c1"; return; fi
+    say "Testing proxy (2/2): $c2"
+    if proxy_try "$c2"; then ok "Proxy OK. Using: $c2"; PROXY="$c2"; return; fi
+    err "Proxy failed (both). Try again."
   done
-
-  ok "Arvan cleanup: kept=$MAX_BACKUPS deleted=$REMOVE"
 }
 
-cmd_backup() {
-  load_config
-  FAIL_COUNT=0
+# ============================================================
+# TELEGRAM SEND  (checks ok:true)
+# ============================================================
+telegram_send(){
+  local chat_id="$1" caption="$2" file="$3"
+  local api="https://api.telegram.org/bot${TOKEN}/sendDocument"
+  local response
 
-  DATE=$(date +%Y-%m-%d_%H-%M-%S)
-  FILE="$BACKUP_DIR/backup_${DATE}.tar.gz"
-
-  say "Creating full backup (path-preserving)..."
-  say "Includes: /opt/marzban + /var/lib/marzban"
-
-  tar \
-    --exclude='/opt/marzban-backup/backups' \
-    --exclude='/opt/marzban/backup' \
-    --exclude='/var/lib/marzban/xray-core' \
-    --exclude='*.log' \
-    --exclude='*.log.*' \
-    -czf "$FILE" \
-    /opt/marzban /var/lib/marzban
-
-  SIZE=$(du -h "$FILE" | awk '{print $1}')
-  ok "Backup created: $FILE ($SIZE)"
-
-  CAPTION="MBM Backup - $DATE"
-
-  if [ "${TELEGRAM_ENABLED:-false}" = "true" ]; then
-    say "Sending to Telegram..."
-    telegram_send "$CAPTION" "$FILE"
-  fi
-
-  if [ "${BALE_ENABLED:-false}" = "true" ]; then
-    say "Sending to Bale..."
-    bale_send "$CAPTION" "$FILE"
-  fi
-
-  if [ "${RUBIKA_ENABLED:-false}" = "true" ]; then
-    say "Sending to Rubika..."
-    rubika_send "$FILE"
-  fi
-
-  if [ "${ARVAN_ENABLED:-false}" = "true" ]; then
-    say "Uploading to Arvan Object Storage..."
-    arvan_upload "$FILE"
-  fi
-
-  if [ "$FAIL_COUNT" -eq 0 ]; then
-    ok "All destinations completed successfully ✅"
+  if [ -n "${PROXY:-}" ]; then
+    response="$(curl --proxy "$PROXY" -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
   else
-    err "$FAIL_COUNT destination(s) failed. Backup file kept locally at: $FILE"
+    response="$(curl -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
   fi
 
-  if [ -n "${MAX_BACKUPS:-}" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
-    COUNT=$(ls -1 "$BACKUP_DIR"/backup_*.tar.gz 2>/dev/null | wc -l)
+  if echo "$response" | grep -q '"ok":true'; then
+    ok "Telegram: sent successfully ✅"
+    return 0
+  fi
+  err "Telegram send FAILED!"
+  err "Response: $response"
+  return 1
+}
 
-    if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
-      REMOVE=$((COUNT - MAX_BACKUPS))
-      ls -1t "$BACKUP_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs rm -f
-      say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
+# ============================================================
+# VERSION
+# ============================================================
+cmd_version(){ echo -e "${WHT}mbm${NC} ${YLW}v${VERSION}${NC}"; }
+
+# ============================================================
+# STATUS
+# ============================================================
+cmd_status(){
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${WHT}MBM Status${NC}  ${YLW}v${VERSION}${NC}"
+  echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+  [ -x /usr/local/bin/mbm ] && ok "Binary: /usr/local/bin/mbm" || err "Binary not found"
+  [ -f "$CONF" ] && ok "Config: $CONF" || warn "Config: missing (run mbm install)"
+
+  if crontab -l 2>/dev/null | grep -q "$CRON_TAG"; then
+    ok "Cron: active"
+    crontab -l 2>/dev/null | grep "$CRON_TAG" || true
+  else
+    warn "Cron: not set"
+  fi
+
+  local DIR="$APP_DIR/backups"
+  echo -e "${CYN}Backup dir:${NC} $DIR"
+  local LAST
+  LAST="$(ls -t "$DIR"/*.tar.gz 2>/dev/null | head -n1 || true)"
+  if [ -n "$LAST" ]; then
+    ok "Last backup: $LAST ($(du -sh "$LAST" 2>/dev/null | cut -f1))"
+  else
+    warn "Last backup: none"
+  fi
+
+  [ -f "$APP_DIR/cron.log" ] && {
+    echo -e "${CYN}Last cron log:${NC}"
+    tail -n 5 "$APP_DIR/cron.log"
+  }
+
+  if [ -f "$CONF" ]; then
+    load_conf
+    if [ -n "${PROXY:-}" ]; then
+      echo -e "${CYN}Proxy:${NC} $PROXY"
+      proxy_try "$PROXY" && ok "Proxy test: OK" || warn "Proxy test: FAIL"
+    else
+      echo -e "${CYN}Proxy:${NC} (none)"
     fi
   fi
+
+  [ -n "$MARZBAN_BIN" ] && ok "marzban: $MARZBAN_BIN" || warn "marzban: not found in PATH"
 }
 
-cmd_install() {
-  cp "$0" "$BIN_PATH"
-  chmod +x "$BIN_PATH"
+# ============================================================
+# UPDATE (single-file)
+# ============================================================
+cmd_update(){
+  say "Updating mbm from GitHub..."
+  local tmp
+  tmp="$(mktemp)"
 
-  TELEGRAM_ENABLED=false
-  BALE_ENABLED=false
-  RUBIKA_ENABLED=false
-  ARVAN_ENABLED=false
+  curl -fsSL "$REPO_RAW_BASE/install.sh" -o "$tmp" \
+    || { err "Download failed"; rm -f "$tmp"; exit 1; }
 
-  TELEGRAM_TOKEN=""
-  TELEGRAM_CHAT_ID=""
-  BALE_TOKEN=""
-  BALE_CHAT_ID=""
-  RUBIKA_TOKEN=""
-  RUBIKA_CHAT_ID=""
+  install -m 755 "$tmp" /usr/local/bin/mbm
+  rm -f "$tmp"
 
-  ARVAN_ENDPOINT=""
-  ARVAN_BUCKET=""
-  ARVAN_ACCESS_KEY=""
-  ARVAN_SECRET_KEY=""
-  ARVAN_REGION="auto"
-  ARVAN_PATH="MBM"
+  ok "Updated to $(/usr/local/bin/mbm version | tr -d '
+')"
+}
 
-  echo
 
-  read -rp "Enable Telegram? (y/n): " ans
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    TELEGRAM_ENABLED=true
-    read -rp "Telegram Bot Token: " TELEGRAM_TOKEN
-    read -rp "Telegram Chat ID: " TELEGRAM_CHAT_ID
-  fi
+# ============================================================
+# INSTALL
+# ============================================================
+cmd_install(){
+  ensure_deps
 
-  read -rp "Enable Bale? (y/n): " ans
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    BALE_ENABLED=true
-    read -rp "Bale Bot Token: " BALE_TOKEN
-    read -rp "Bale Chat ID: " BALE_CHAT_ID
-  fi
+  while true; do
+    echo -e "${CYN}Telegram Bot Token:${NC}"
+    read -r TOKEN
+    [[ "$TOKEN" =~ ^[0-9]+:.{35,}$ ]] && break
+    err "Invalid token format. Expected: 123456789:ABCdef..."
+  done
 
-  read -rp "Enable Rubika? (y/n): " ans
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    RUBIKA_ENABLED=true
-    read -rp "Rubika Bot Token: " RUBIKA_TOKEN
-    read -rp "Rubika Chat ID/GUID: " RUBIKA_CHAT_ID
-  fi
+  while true; do
+    echo -e "${CYN}Telegram Chat ID:${NC}"
+    read -r CHAT_ID
+    [[ "$CHAT_ID" =~ ^-?[0-9]+$ ]] && break
+    err "Invalid Chat ID. Must be a number (e.g. -100123456789 or 123456789)"
+  done
 
-  read -rp "Enable Arvan Object Storage? (y/n): " ans
-  if [[ "$ans" =~ ^[Yy]$ ]]; then
-    ARVAN_ENABLED=true
-    read -rp "Arvan Endpoint: " ARVAN_ENDPOINT
-    read -rp "Bucket Name: " ARVAN_BUCKET
-    read -rp "Access Key: " ARVAN_ACCESS_KEY
-    read -rp "Secret Key: " ARVAN_SECRET_KEY
-    read -rp "Region [auto]: " ARVAN_REGION
-    ARVAN_REGION="${ARVAN_REGION:-auto}"
-    read -rp "Path Prefix [MBM]: " ARVAN_PATH
-    ARVAN_PATH="${ARVAN_PATH:-MBM}"
-  fi
+  validate_proxy
 
-  read -rp "Max backups to keep [7]: " MAX_BACKUPS
-  MAX_BACKUPS="${MAX_BACKUPS:-7}"
+  while true; do
+    echo -e "${CYN}Backup interval (minutes, >= 1):${NC}"
+    read -r INTERVAL_MINUTES
+    [[ "$INTERVAL_MINUTES" =~ ^[0-9]+$ ]] && [ "$INTERVAL_MINUTES" -ge 1 ] && break
+    err "Please enter a valid number >= 1"
+  done
 
-  read -rp "Cron schedule [0 */1 * * *]: " CRON_SCHEDULE
-  CRON_SCHEDULE="${CRON_SCHEDULE:-0 */1 * * *}"
+  while true; do
+    echo -e "${CYN}Max backups to keep (>= 1):${NC}"
+    read -r MAX_BACKUPS
+    [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -ge 1 ] && break
+    err "Please enter a valid number >= 1"
+  done
 
-  save_config
-
-  (
-    crontab -l 2>/dev/null | grep -v "$BIN_PATH backup" || true
-    echo "$CRON_SCHEDULE $BIN_PATH backup >/dev/null 2>&1"
-  ) | crontab -
-
-  ok "Cron set: $CRON_SCHEDULE"
+  save_conf
+  setup_cron
   ok "Installed successfully ✅"
-
   say "Running first backup now..."
   cmd_backup
 }
 
-cmd_reinstall() {
-  say "Removing old config and cron jobs..."
+# ============================================================
+# BACKUP  (NO stop/start, tolerate "file changed" warnings)
+# ============================================================
+cmd_backup(){
+  ensure_deps
+  load_conf
 
-  rm -f "$CONFIG_FILE"
+  local OUT_DIR="$APP_DIR/backups"
+  mkdir -p "$OUT_DIR"
 
-  crontab -l 2>/dev/null | grep -v "$BIN_PATH backup" | crontab - || true
+  local STAMP HUMAN FINAL
+  STAMP="$(jalali_stamp)"
+  HUMAN="$(jalali_human)"
+  FINAL="$OUT_DIR/backup_${STAMP}.tar.gz"
 
-  ok "Old config removed."
-  cmd_install
+  say "Creating full backup (path-preserving)..."
+  say "Includes: /opt/marzban  +  /var/lib/marzban"
+  warn "Excluding: /opt/marzban/backup  and  /var/lib/marzban/xray-core"
+
+  # tar may warn "file changed as we read it" (exit code 1). We accept it if archive created.
+  set +e
+  tar -czf "$FINAL" -C / \
+    --warning=no-file-changed \
+    --exclude='opt/marzban/backup' \
+    --exclude='opt/marzban/backup/*' \
+    --exclude='var/lib/marzban/xray-core' \
+    --exclude='var/lib/marzban/xray-core/*' \
+    opt/marzban var/lib/marzban
+  local rc=$?
+  set -e
+
+  if [ "$rc" -ne 0 ]; then
+    if [ "$rc" -eq 1 ] && [ -s "$FINAL" ]; then
+      warn "tar returned warnings (rc=1) but archive was created. Continuing..."
+    else
+      err "Failed to create backup archive (tar exit: $rc)."
+      rm -f "$FINAL" || true
+      exit 1
+    fi
+  fi
+
+  local SIZE
+  SIZE="$(du -sh "$FINAL" 2>/dev/null | cut -f1)"
+  ok "Backup created: $FINAL ($SIZE)"
+
+  local CAPTION
+  CAPTION="📦 Backup Information
+🌐 Server IP: $(get_server_ip)
+📁 File: $(basename "$FINAL")
+💾 Size: $SIZE
+⏰ Time: $HUMAN"
+
+  say "Sending to Telegram..."
+  if ! telegram_send "$CHAT_ID" "$CAPTION" "$FINAL"; then
+    err "Backup file kept locally at: $FINAL"
+    echo "$(date): FAILED to send $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
+    exit 1
+  fi
+
+  echo "$(date): OK — $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
+
+  # cleanup old backups
+  if [ -n "${MAX_BACKUPS:-}" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
+    local COUNT REMOVE
+    COUNT="$(ls -1 "$OUT_DIR"/backup_*.tar.gz 2>/dev/null | wc -l)"
+    if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
+      REMOVE=$(( COUNT - MAX_BACKUPS ))
+      ls -1t "$OUT_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs -r rm -f
+      say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
+    fi
+  fi
+
+  ok "Backup completed and sent ✅"
 }
 
-cmd_update() {
-  curl -fsSL \
-    https://raw.githubusercontent.com/nursemazloom/marzban-backup-manager/main/install.sh \
-    -o "$BIN_PATH"
+# ============================================================
+# RESTORE
+# ============================================================
+cmd_restore(){
+  ensure_deps
+  load_conf
 
-  chmod +x "$BIN_PATH"
+  [ -z "$MARZBAN_BIN" ] && { err "marzban binary not found! Make sure marzban is installed."; exit 1; }
 
-  ok "Updated successfully to latest version ✅"
-}
+  local BACKUP_DIR="$APP_DIR/backups"
+  local LATEST FILE INPUT CONFIRM
+  LATEST="$(ls -t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | head -n1 || true)"
 
-cmd_status() {
-  load_config
-
-  echo "MBM v$VERSION"
   echo
-  echo "Config: $CONFIG_FILE"
-  echo "Backup dir: $BACKUP_DIR"
+  title "MBM Restore  v${VERSION}"
+
+  if [ -z "$LATEST" ]; then
+    err "No backups found in: $BACKUP_DIR"
+    exit 1
+  fi
+
+  echo -e "${CYN}Latest backup found:${NC}"
+  echo -e "  ${WHT}$LATEST${NC} ($(du -sh "$LATEST" 2>/dev/null | cut -f1))"
   echo
-  echo "Telegram: ${TELEGRAM_ENABLED:-false}"
-  echo "Bale: ${BALE_ENABLED:-false}"
-  echo "Rubika: ${RUBIKA_ENABLED:-false}"
-  echo "Arvan: ${ARVAN_ENABLED:-false}"
-  echo "Max backups: ${MAX_BACKUPS:-7}"
+  echo -e "${YLW}Enter backup file path to restore.${NC}"
+  echo -e "${YLW}Press ENTER to restore latest:${NC} ${WHT}$LATEST${NC}"
+  echo
+
+  read -r -p "Backup path: " INPUT
+  FILE="${INPUT:-$LATEST}"
+
+  [ -f "$FILE" ] || { err "Backup file not found: $FILE"; exit 1; }
+
+  echo
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${RED}⚠⚠  WARNING — DANGEROUS OPERATION  ⚠⚠${NC}"
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${WHT}This will REPLACE your current Marzban data with:${NC}"
+  echo -e "  ${YLW}$FILE${NC}"
+  echo
+  echo -e "${YLW}Type exactly:${NC} ${WHT}yes${NC}  ${YLW}to continue.${NC}"
+
+  read -r -p "Confirm (yes): " CONFIRM
+  [ "$CONFIRM" = "yes" ] || { warn "Restore cancelled."; exit 0; }
+
+  say "Stopping Marzban..."
+  "$MARZBAN_BIN" down >/dev/null 2>&1 || true
+
+  say "Validating backup..."
+  tar -tzf "$FILE" | grep -Eq '^(./)?opt/marzban/' || { err "Invalid backup: missing opt/marzban/"; exit 1; }
+  tar -tzf "$FILE" | grep -Eq '^(./)?var/lib/marzban/' || { err "Invalid backup: missing var/lib/marzban/"; exit 1; }
+
+  say "Restoring backup..."
+  tar --touch -xzf "$FILE" -C / || { err "Restore failed while extracting archive."; exit 1; }
+
+  say "Starting Marzban..."
+  "$MARZBAN_BIN" restart -n >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" restart >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" up -n >/dev/null 2>&1 || \
+  "$MARZBAN_BIN" up >/dev/null 2>&1 || true
+
+  ok "Restore completed successfully ✅"
 }
 
-cmd_uninstall() {
-  say "Removing MBM..."
-
-  crontab -l 2>/dev/null | grep -v "$BIN_PATH backup" | crontab - || true
-
-  rm -f "$BIN_PATH"
-
-  ok "Uninstalled. Config and backups are kept at: $APP_DIR"
+# ============================================================
+# UNINSTALL
+# ============================================================
+cmd_uninstall(){
+  crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+  rm -rf "$APP_DIR"
+  rm -f /usr/local/bin/mbm
+  ok "Uninstalled ✅"
 }
 
+# ============================================================
+# SELF-INSTALL (when executed as install.sh)
+# ============================================================
+self_install(){
+  title "Installing Marzban Backup Manager v${VERSION}"
+  say "Installing to /usr/local/bin/mbm ..."
+  TMP_FILE="$(mktemp)"
+  curl -fsSL "$REPO_RAW_BASE/install.sh" -o "$TMP_FILE" || { err "Download failed"; rm -f "$TMP_FILE"; exit 1; }
+  install -m 755 "$TMP_FILE" /usr/local/bin/mbm
+  rm -f "$TMP_FILE"
+  mkdir -p "$APP_DIR"
+  echo "$VERSION" > "$APP_DIR/VERSION" || true
+  ok "Binary installed at /usr/local/bin/mbm"
+  echo
+  /usr/local/bin/mbm install
+}
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
 case "${1:-}" in
-  install)
-    cmd_install
-    ;;
-  backup)
-    cmd_backup
-    ;;
-  reinstall)
-    cmd_reinstall
-    ;;
-  update)
-    cmd_update
-    ;;
-  status)
-    cmd_status
-    ;;
-  uninstall)
-    cmd_uninstall
-    ;;
-  *)
-    echo "MBM v$VERSION"
-    echo
-    echo "Usage:"
-    echo "  mbm install"
-    echo "  mbm backup"
-    echo "  mbm reinstall"
-    echo "  mbm update"
-    echo "  mbm status"
-    echo "  mbm uninstall"
-    ;;
+  install)   cmd_install ;;
+  backup)    cmd_backup ;;
+  restore)   cmd_restore ;;
+  status)    cmd_status ;;
+  version)   cmd_version ;;
+  update)    cmd_update ;;
+  uninstall) cmd_uninstall ;;
+  help)      help ;;
+  "" )
+# If mbm is not installed yet → run self installer
+if [ ! -x /usr/local/bin/mbm ]; then
+  self_install
+else
+  help
+fi
+;;
+
+  *) help ;;
 esac
