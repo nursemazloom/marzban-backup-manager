@@ -299,7 +299,7 @@ rubika_send(){
 
 arvan_upload_and_clean(){
   local file="$1" max="$2"
-  say "Processing ArvanCloud (Upload & Clean)..."
+  say "Processing ArvanCloud (Upload & Clean in 'mbm/' folder)..."
   
   python3 - <<EOF
 import os, sys, boto3
@@ -311,6 +311,7 @@ ACCESS_KEY = "$ARVAN_ACCESS_KEY"
 SECRET_KEY = "$ARVAN_SECRET_KEY"
 ENDPOINT = "$ARVAN_ENDPOINT"
 BUCKET = "$ARVAN_BUCKET"
+PREFIX = "mbm/"
 
 try:
     s3 = boto3.client(
@@ -322,16 +323,19 @@ try:
     )
     
     file_name = os.path.basename(FILE_PATH)
-    print(f"➜ Uploading {file_name} to ArvanCloud...")
-    s3.upload_file(FILE_PATH, BUCKET, file_name)
+    object_name = f"{PREFIX}{file_name}"
+    
+    print(f"➜ Uploading {file_name} to ArvanCloud folder '{PREFIX}'...")
+    s3.upload_file(FILE_PATH, BUCKET, object_name)
     print("✔ ArvanCloud: Upload successful ✅")
     
     # Cleanup Old Backups
-    print(f"➜ Checking old backups in ArvanCloud (Max: {MAX_BACKUPS})...")
-    response = s3.list_objects_v2(Bucket=BUCKET)
+    print(f"➜ Checking old backups in ArvanCloud folder '{PREFIX}' (Max: {MAX_BACKUPS})...")
+    response = s3.list_objects_v2(Bucket=BUCKET, Prefix=PREFIX)
     if 'Contents' in response:
         objects = response['Contents']
-        # Filter files that match backup pattern (optional, currently sorts all)
+        # فیلتر کردن خود پوشه در صورت وجود
+        objects = [obj for obj in objects if obj['Key'] != PREFIX] 
         objects.sort(key=lambda x: x['LastModified'])
         
         while len(objects) > MAX_BACKUPS:
