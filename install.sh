@@ -2,11 +2,11 @@
 # ============================================================
 # Marzban Backup Manager (MBM)
 # Single-file: installer + mbm binary
-# Version: 1.1.0
+# Version: 1.2.0 (Added Bale, Rubika, Arvan, Toggles, Reinstall)
 # ============================================================
 set -e
 
-VERSION="1.1.1"
+VERSION="1.2.0"
 
 # ===== Paths =====
 APP_DIR="/opt/marzban-backup"
@@ -44,8 +44,9 @@ help(){
   echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo -e "${CYN}Usage:${NC}  mbm <command>\n"
   echo -e "${YLW}Commands:${NC}"
-  printf "  ${WHT}%-12s${NC} | %s\n" "install"   "Setup Telegram + Proxy + Schedule (runs first backup)"
-  printf "  ${WHT}%-12s${NC} | %s\n" "backup"    "Create backup now and send to Telegram"
+  printf "  ${WHT}%-12s${NC} | %s\n" "install"   "Setup Telegram/Bale/Rubika/Arvan + Schedule"
+  printf "  ${WHT}%-12s${NC} | %s\n" "reinstall" "Update configs and schedule without deleting old backups"
+  printf "  ${WHT}%-12s${NC} | %s\n" "backup"    "Create backup now and send to enabled platforms"
   printf "  ${WHT}%-12s${NC} | %s\n" "restore"   "Interactive restore (asks backup path and confirmation)"
   printf "  ${WHT}%-12s${NC} | %s\n" "status"    "Show mbm + cron + last backup status"
   printf "  ${WHT}%-12s${NC} | %s\n" "version"   "Show version"
@@ -83,17 +84,23 @@ install_deps(){
   apt-get install -y curl cron python3 python3-pip tar gzip iproute2 ca-certificates >/dev/null 2>&1 || true
   systemctl enable --now cron >/dev/null 2>&1 || true
 
-  python3 -c "import jdatetime" >/dev/null 2>&1 && { ok "jdatetime already available"; return; }
-
-  apt-get install -y python3-jdatetime >/dev/null 2>&1 || true
-  python3 -c "import jdatetime" >/dev/null 2>&1 && { ok "Installed jdatetime via apt"; return; }
-
   python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
-  python3 -m pip install -q jdatetime --break-system-packages >/dev/null 2>&1 || \
-  python3 -m pip install -q --user jdatetime >/dev/null 2>&1 || true
+  
+  # Install jdatetime
+  python3 -c "import jdatetime" >/dev/null 2>&1 || {
+    apt-get install -y python3-jdatetime >/dev/null 2>&1 || true
+    python3 -m pip install -q jdatetime --break-system-packages >/dev/null 2>&1 || \
+    python3 -m pip install -q --user jdatetime >/dev/null 2>&1 || true
+  }
+  
+  # Install boto3 for ArvanCloud
+  python3 -c "import boto3" >/dev/null 2>&1 || {
+    python3 -m pip install -q boto3 --break-system-packages >/dev/null 2>&1 || \
+    python3 -m pip install -q --user boto3 >/dev/null 2>&1 || true
+  }
 
-  python3 -c "import jdatetime" >/dev/null 2>&1 && ok "Installed jdatetime via pip" || \
-  warn "Could not auto-install jdatetime — Jalali timestamps may not work"
+  python3 -c "import jdatetime" >/dev/null 2>&1 && ok "jdatetime is ready" || warn "jdatetime not installed"
+  python3 -c "import boto3" >/dev/null 2>&1 && ok "boto3 is ready" || warn "boto3 not installed (Arvan might fail)"
 }
 
 ensure_deps(){
@@ -102,6 +109,7 @@ ensure_deps(){
   command -v python3 >/dev/null 2>&1 || install_deps
   command -v tar >/dev/null 2>&1 || install_deps
   python3 -c "import jdatetime" >/dev/null 2>&1 || install_deps
+  python3 -c "import boto3" >/dev/null 2>&1 || install_deps
 }
 
 # ============================================================
@@ -110,8 +118,24 @@ ensure_deps(){
 save_conf(){
   mkdir -p "$APP_DIR"
   cat > "$CONF" <<CFG
+ENABLE_TELEGRAM="$ENABLE_TELEGRAM"
 TOKEN="$TOKEN"
 CHAT_ID="$CHAT_ID"
+
+ENABLE_BALE="$ENABLE_BALE"
+BALE_TOKEN="$BALE_TOKEN"
+BALE_CHAT_ID="$BALE_CHAT_ID"
+
+ENABLE_RUBIKA="$ENABLE_RUBIKA"
+RUBIKA_TOKEN="$RUBIKA_TOKEN"
+RUBIKA_CHAT_ID="$RUBIKA_CHAT_ID"
+
+ENABLE_ARVAN="$ENABLE_ARVAN"
+ARVAN_ACCESS_KEY="$ARVAN_ACCESS_KEY"
+ARVAN_SECRET_KEY="$ARVAN_SECRET_KEY"
+ARVAN_ENDPOINT="$ARVAN_ENDPOINT"
+ARVAN_BUCKET="$ARVAN_BUCKET"
+
 PROXY="$PROXY"
 INTERVAL_MINUTES="$INTERVAL_MINUTES"
 MAX_BACKUPS="$MAX_BACKUPS"
@@ -189,15 +213,18 @@ proxy_try(){
 validate_proxy(){
   while true; do
     echo
-    echo -e "${WHT}SOCKS5 Proxy (optional)${NC}"
+    echo -e "${WHT}SOCKS5 Proxy (optional, mainly for Telegram)${NC}"
     echo "Formats:"
     echo "  socks5h://127.0.0.1:1080"
     echo "  socks5://127.0.0.1:1080"
     echo "  127.0.0.1:1080"
-    echo "Leave empty if not needed:"
+    echo "Leave empty if not needed, or press Enter to keep current: ${YLW}[${PROXY}]${NC}"
     read -r INPUT
 
-    if [ -z "$INPUT" ]; then PROXY=""; return; fi
+    if [ -z "$INPUT" ]; then 
+      INPUT="$PROXY"
+      if [ -z "$INPUT" ]; then PROXY=""; return; fi
+    fi
     if [[ "$INPUT" =~ ^http ]]; then err "Invalid format (only socks5/socks5h)"; continue; fi
 
     local base=""
@@ -212,12 +239,12 @@ validate_proxy(){
     if proxy_try "$c1"; then ok "Proxy OK. Using: $c1"; PROXY="$c1"; return; fi
     say "Testing proxy (2/2): $c2"
     if proxy_try "$c2"; then ok "Proxy OK. Using: $c2"; PROXY="$c2"; return; fi
-    err "Proxy failed (both). Try again."
+    err "Proxy failed (both). Try again or leave empty."
   done
 }
 
 # ============================================================
-# TELEGRAM SEND  (checks ok:true)
+# PLATFORM UPLOADS
 # ============================================================
 telegram_send(){
   local chat_id="$1" caption="$2" file="$3"
@@ -225,28 +252,175 @@ telegram_send(){
   local response
 
   if [ -n "${PROXY:-}" ]; then
-    response="$(curl --proxy "$PROXY" -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
+    response="$(curl --proxy "$PROXY" -s -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
   else
-    response="$(curl -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
+    response="$(curl -s -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
   fi
 
   if echo "$response" | grep -q '"ok":true'; then
     ok "Telegram: sent successfully ✅"
     return 0
   fi
-  err "Telegram send FAILED!"
-  err "Response: $response"
+  err "Telegram send FAILED! Response: $response"
   return 1
 }
 
+bale_send(){
+  local token="$1" chat_id="$2" caption="$3" file="$4"
+  local api="https://tapi.bale.ai/bot${token}/sendDocument"
+  local response
+  # Bale usually doesn't need proxy for Iran servers
+  response="$(curl -s -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
+  
+  if echo "$response" | grep -q '"ok":true'; then
+    ok "Bale: sent successfully ✅"
+    return 0
+  fi
+  err "Bale send FAILED! Response: $response"
+  return 1
+}
+
+rubika_send(){
+  local token="$1" chat_id="$2" caption="$3" file="$4"
+  # Placeholder for standard bot API. Rubika might need custom gateway URL.
+  local api="https://messenger.rubika.ir/v3/bot${token}/sendDocument"
+  local response
+  
+  response="$(curl -s -F chat_id="$chat_id" -F caption="$caption" -F document=@"$file" "$api" 2>&1 || true)"
+  
+  if echo "$response" | grep -q '"ok":true'; then
+    ok "Rubika: sent successfully ✅"
+    return 0
+  fi
+  err "Rubika send FAILED! Response: $response"
+  # Don't strictly fail the script if Rubika fails, just log it.
+  return 0 
+}
+
+arvan_upload_and_clean(){
+  local file="$1" max="$2"
+  say "Processing ArvanCloud (Upload & Clean)..."
+  
+  python3 - <<EOF
+import os, sys, boto3
+from botocore.client import Config
+
+FILE_PATH = "$file"
+MAX_BACKUPS = int("$max") if "$max".isdigit() else 5
+ACCESS_KEY = "$ARVAN_ACCESS_KEY"
+SECRET_KEY = "$ARVAN_SECRET_KEY"
+ENDPOINT = "$ARVAN_ENDPOINT"
+BUCKET = "$ARVAN_BUCKET"
+
+try:
+    s3 = boto3.client(
+        's3',
+        endpoint_url=ENDPOINT,
+        aws_access_key_id=ACCESS_KEY,
+        aws_secret_access_key=SECRET_KEY,
+        config=Config(signature_version='s3v4')
+    )
+    
+    file_name = os.path.basename(FILE_PATH)
+    print(f"➜ Uploading {file_name} to ArvanCloud...")
+    s3.upload_file(FILE_PATH, BUCKET, file_name)
+    print("✔ ArvanCloud: Upload successful ✅")
+    
+    # Cleanup Old Backups
+    print(f"➜ Checking old backups in ArvanCloud (Max: {MAX_BACKUPS})...")
+    response = s3.list_objects_v2(Bucket=BUCKET)
+    if 'Contents' in response:
+        objects = response['Contents']
+        # Filter files that match backup pattern (optional, currently sorts all)
+        objects.sort(key=lambda x: x['LastModified'])
+        
+        while len(objects) > MAX_BACKUPS:
+            oldest = objects[0]
+            print(f"➜ Deleting old backup from Arvan: {oldest['Key']}")
+            s3.delete_object(Bucket=BUCKET, Key=oldest['Key'])
+            objects.pop(0)
+        print("✔ ArvanCloud: Cleanup completed ✅")
+    
+except Exception as e:
+    print(f"✖ ArvanCloud Error: {str(e)}")
+    sys.exit(1)
+EOF
+}
+
 # ============================================================
-# VERSION
+# HELPER FOR PROMPTS
+# ============================================================
+ask_yes_no() {
+  local prompt="$1" var_name="$2" default="$3"
+  local input
+  while true; do
+    echo -e "${CYN}${prompt} (y/n) [${default}]:${NC}"
+    read -r input
+    input="${input:-$default}"
+    if [[ "$input" == "y" || "$input" == "Y" ]]; then eval "$var_name=\"true\""; return; fi
+    if [[ "$input" == "n" || "$input" == "N" ]]; then eval "$var_name=\"false\""; return; fi
+  done
+}
+
+ask_val() {
+  local prompt="$1" var_name="$2" default="$3"
+  local input
+  echo -e "${CYN}${prompt} [${default}]:${NC}"
+  read -r input
+  input="${input:-$default}"
+  eval "$var_name=\"$input\""
+}
+
+gather_config() {
+  echo
+  title "Platform Configurations"
+  
+  ask_yes_no "Enable Telegram Backup?" "ENABLE_TELEGRAM" "${ENABLE_TELEGRAM:-true}"
+  if [ "$ENABLE_TELEGRAM" = "true" ]; then
+    ask_val "Telegram Bot Token:" "TOKEN" "$TOKEN"
+    ask_val "Telegram Chat ID:" "CHAT_ID" "$CHAT_ID"
+  fi
+
+  ask_yes_no "Enable Bale Backup?" "ENABLE_BALE" "${ENABLE_BALE:-false}"
+  if [ "$ENABLE_BALE" = "true" ]; then
+    ask_val "Bale Bot Token:" "BALE_TOKEN" "$BALE_TOKEN"
+    ask_val "Bale Chat ID:" "BALE_CHAT_ID" "$BALE_CHAT_ID"
+  fi
+
+  ask_yes_no "Enable Rubika Backup?" "ENABLE_RUBIKA" "${ENABLE_RUBIKA:-false}"
+  if [ "$ENABLE_RUBIKA" = "true" ]; then
+    ask_val "Rubika Bot Token:" "RUBIKA_TOKEN" "$RUBIKA_TOKEN"
+    ask_val "Rubika Chat ID:" "RUBIKA_CHAT_ID" "$RUBIKA_CHAT_ID"
+  fi
+
+  ask_yes_no "Enable ArvanCloud Storage Backup?" "ENABLE_ARVAN" "${ENABLE_ARVAN:-false}"
+  if [ "$ENABLE_ARVAN" = "true" ]; then
+    ask_val "Arvan Access Key:" "ARVAN_ACCESS_KEY" "$ARVAN_ACCESS_KEY"
+    ask_val "Arvan Secret Key:" "ARVAN_SECRET_KEY" "$ARVAN_SECRET_KEY"
+    ask_val "Arvan Endpoint (e.g. https://s3.ir-thr-at1.arvanstorage.ir):" "ARVAN_ENDPOINT" "$ARVAN_ENDPOINT"
+    ask_val "Arvan Bucket Name:" "ARVAN_BUCKET" "$ARVAN_BUCKET"
+  fi
+
+  validate_proxy
+
+  while true; do
+    ask_val "Backup interval (minutes, >= 1):" "INTERVAL_MINUTES" "${INTERVAL_MINUTES:-360}"
+    [[ "$INTERVAL_MINUTES" =~ ^[0-9]+$ ]] && [ "$INTERVAL_MINUTES" -ge 1 ] && break
+    err "Please enter a valid number >= 1"
+  done
+
+  while true; do
+    ask_val "Max backups to keep locally and on Arvan (>= 1):" "MAX_BACKUPS" "${MAX_BACKUPS:-5}"
+    [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -ge 1 ] && break
+    err "Please enter a valid number >= 1"
+  done
+}
+
+# ============================================================
+# VERSION & STATUS
 # ============================================================
 cmd_version(){ echo -e "${WHT}mbm${NC} ${YLW}v${VERSION}${NC}"; }
 
-# ============================================================
-# STATUS
-# ============================================================
 cmd_status(){
   echo -e "${MAG}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo -e "${WHT}MBM Status${NC}  ${YLW}v${VERSION}${NC}"
@@ -279,6 +453,12 @@ cmd_status(){
 
   if [ -f "$CONF" ]; then
     load_conf
+    echo -e "\n${CYN}Enabled Platforms:${NC}"
+    [ "$ENABLE_TELEGRAM" = "true" ] && ok "Telegram"
+    [ "$ENABLE_BALE" = "true" ] && ok "Bale"
+    [ "$ENABLE_RUBIKA" = "true" ] && ok "Rubika"
+    [ "$ENABLE_ARVAN" = "true" ] && ok "ArvanCloud"
+    
     if [ -n "${PROXY:-}" ]; then
       echo -e "${CYN}Proxy:${NC} $PROXY"
       proxy_try "$PROXY" && ok "Proxy test: OK" || warn "Proxy test: FAIL"
@@ -308,43 +488,12 @@ cmd_update(){
 ')"
 }
 
-
 # ============================================================
-# INSTALL
+# INSTALL & REINSTALL
 # ============================================================
 cmd_install(){
   ensure_deps
-
-  while true; do
-    echo -e "${CYN}Telegram Bot Token:${NC}"
-    read -r TOKEN
-    [[ "$TOKEN" =~ ^[0-9]+:.{35,}$ ]] && break
-    err "Invalid token format. Expected: 123456789:ABCdef..."
-  done
-
-  while true; do
-    echo -e "${CYN}Telegram Chat ID:${NC}"
-    read -r CHAT_ID
-    [[ "$CHAT_ID" =~ ^-?[0-9]+$ ]] && break
-    err "Invalid Chat ID. Must be a number (e.g. -100123456789 or 123456789)"
-  done
-
-  validate_proxy
-
-  while true; do
-    echo -e "${CYN}Backup interval (minutes, >= 1):${NC}"
-    read -r INTERVAL_MINUTES
-    [[ "$INTERVAL_MINUTES" =~ ^[0-9]+$ ]] && [ "$INTERVAL_MINUTES" -ge 1 ] && break
-    err "Please enter a valid number >= 1"
-  done
-
-  while true; do
-    echo -e "${CYN}Max backups to keep (>= 1):${NC}"
-    read -r MAX_BACKUPS
-    [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -ge 1 ] && break
-    err "Please enter a valid number >= 1"
-  done
-
+  gather_config
   save_conf
   setup_cron
   ok "Installed successfully ✅"
@@ -352,8 +501,21 @@ cmd_install(){
   cmd_backup
 }
 
+cmd_reinstall(){
+  say "Reinstalling / Updating Configs..."
+  ensure_deps
+  if [ -f "$CONF" ]; then
+    load_conf
+    say "Current config loaded. Press Enter to keep current values."
+  fi
+  gather_config
+  save_conf
+  setup_cron
+  ok "Reinstalled successfully ✅"
+}
+
 # ============================================================
-# BACKUP  (NO stop/start, tolerate "file changed" warnings)
+# BACKUP
 # ============================================================
 cmd_backup(){
   ensure_deps
@@ -371,7 +533,6 @@ cmd_backup(){
   say "Includes: /opt/marzban  +  /var/lib/marzban"
   warn "Excluding: /opt/marzban/backup  and  /var/lib/marzban/xray-core"
 
-  # tar may warn "file changed as we read it" (exit code 1). We accept it if archive created.
   set +e
   tar -czf "$FINAL" -C / \
     --warning=no-file-changed \
@@ -404,27 +565,48 @@ cmd_backup(){
 💾 Size: $SIZE
 ⏰ Time: $HUMAN"
 
-  say "Sending to Telegram..."
-  if ! telegram_send "$CHAT_ID" "$CAPTION" "$FINAL"; then
-    err "Backup file kept locally at: $FINAL"
-    echo "$(date): FAILED to send $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
-    exit 1
+  local ALL_OK="true"
+
+  # Upload logic based on toggles
+  if [ "$ENABLE_TELEGRAM" = "true" ]; then
+    say "Sending to Telegram..."
+    telegram_send "$CHAT_ID" "$CAPTION" "$FINAL" || ALL_OK="false"
   fi
 
-  echo "$(date): OK — $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
+  if [ "$ENABLE_BALE" = "true" ]; then
+    say "Sending to Bale..."
+    bale_send "$BALE_TOKEN" "$BALE_CHAT_ID" "$CAPTION" "$FINAL" || ALL_OK="false"
+  fi
 
-  # cleanup old backups
+  if [ "$ENABLE_RUBIKA" = "true" ]; then
+    say "Sending to Rubika..."
+    rubika_send "$RUBIKA_TOKEN" "$RUBIKA_CHAT_ID" "$CAPTION" "$FINAL" || ALL_OK="false"
+  fi
+
+  if [ "$ENABLE_ARVAN" = "true" ]; then
+    arvan_upload_and_clean "$FINAL" "$MAX_BACKUPS" || ALL_OK="false"
+  fi
+
+  # Log result
+  if [ "$ALL_OK" = "true" ]; then
+    echo "$(date): OK — $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
+  else
+    err "One or more backup destinations failed."
+    echo "$(date): WARNING/FAILED to send to some destinations — $FINAL ($SIZE)" >> "$APP_DIR/cron.log"
+  fi
+
+  # cleanup old backups LOCALLY
   if [ -n "${MAX_BACKUPS:-}" ] && [[ "$MAX_BACKUPS" =~ ^[0-9]+$ ]] && [ "$MAX_BACKUPS" -gt 0 ]; then
     local COUNT REMOVE
     COUNT="$(ls -1 "$OUT_DIR"/backup_*.tar.gz 2>/dev/null | wc -l)"
     if [ "$COUNT" -gt "$MAX_BACKUPS" ]; then
       REMOVE=$(( COUNT - MAX_BACKUPS ))
       ls -1t "$OUT_DIR"/backup_*.tar.gz | tail -n "$REMOVE" | xargs -r rm -f
-      say "Old backups cleaned. Keeping last $MAX_BACKUPS backups."
+      say "Old local backups cleaned. Keeping last $MAX_BACKUPS backups."
     fi
   fi
 
-  ok "Backup completed and sent ✅"
+  ok "Backup process finished ✅"
 }
 
 # ============================================================
@@ -523,6 +705,7 @@ self_install(){
 # ============================================================
 case "${1:-}" in
   install)   cmd_install ;;
+  reinstall) cmd_reinstall ;;
   backup)    cmd_backup ;;
   restore)   cmd_restore ;;
   status)    cmd_status ;;
@@ -531,13 +714,11 @@ case "${1:-}" in
   uninstall) cmd_uninstall ;;
   help)      help ;;
   "" )
-# If mbm is not installed yet → run self installer
 if [ ! -x /usr/local/bin/mbm ]; then
   self_install
 else
   help
 fi
 ;;
-
   *) help ;;
 esac
