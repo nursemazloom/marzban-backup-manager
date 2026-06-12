@@ -479,11 +479,18 @@ cmd_uninstall(){
 }
 
 self_install(){
+  title "Installing Backup Manager v${VERSION}"
+  say "Installing to /usr/local/bin/mbm ..."
+  TMP_FILE="$(mktemp)"
+  curl -fsSL "$REPO_RAW_BASE/install.sh" -o "$TMP_FILE" || { err "Download failed"; rm -f "$TMP_FILE"; exit 1; }
+  install -m 755 "$TMP_FILE" /usr/local/bin/mbm
+  rm -f "$TMP_FILE"
   mkdir -p "$APP_DIR"
-  cp "$SCRIPT_PATH" /usr/local/bin/mbm
-  chmod 755 /usr/local/bin/mbm
+  ok "Binary installed at /usr/local/bin/mbm"
+  echo
   /usr/local/bin/mbm install
 }
+
 
 case "${1:-}" in
   install)   cmd_install ;;
