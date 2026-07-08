@@ -584,21 +584,14 @@ else
     say "Includes: /opt/marzban  +  /var/lib/marzban  +  /var/lib/pg-node"
     warn "Excluding: xray-core and backups"
     
-    # استثنا کردن پوشه‌های بک‌آپ و ایکس‌ری قدیمی
-    TAR_ARGS+=(--exclude='opt/marzban/backup' --exclude='opt/marzban/backup/*')
-    TAR_ARGS+=(--exclude='var/lib/marzban/xray-core' --exclude='var/lib/marzban/xray-core/*')
-    
-    # --- اضافه شدن استثنای جدید برای پاسارگاد سرور جدید ---
-    TAR_ARGS+=(--exclude='var/lib/pg-node/xray-core' --exclude='var/lib/pg-node/xray-core/*')
-    # --------------------------------------------------
+    # قانون حذف بر اساس نام پوشه (مستقل از اینکه مسیر چطور نوشته شده باشد)
+    TAR_ARGS+=(--exclude='*xray-core*' --exclude='*xray-core/*')
+    TAR_ARGS+=(--exclude='*backup*' --exclude='*backup/*')
 
-    # پوشه‌هایی که باید در بک‌آپ قرار بگیرند
-    [ -d /opt/marzban ] && TAR_ARGS+=(opt/marzban)
-    [ -d /var/lib/marzban ] && TAR_ARGS+=(var/lib/marzban)
-    
-    # --- اضافه شدن پوشه اصلی دیتای پاسارگاد به بک‌آپ ---
-    [ -d /var/lib/pg-node ] && TAR_ARGS+=(var/lib/pg-node)
-    # --------------------------------------------------
+    # پوشه‌هایی که باید در بک‌آپ قرار بگیرند (تغییر به آدرس از روت اصلی سرور)
+    [ -d /opt/marzban ] && TAR_ARGS+=(/opt/marzban)
+    [ -d /var/lib/marzban ] && TAR_ARGS+=(/var/lib/marzban)
+    [ -d /var/lib/pg-node ] && TAR_ARGS+=(/var/lib/pg-node)
   fi
 
   if [ ${#TAR_ARGS[@]} -eq 1 ]; then
