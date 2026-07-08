@@ -569,26 +569,24 @@ cmd_backup(){
 
   local TAR_ARGS=(--warning=no-file-changed)
 
+  # --- قانون حذف سراسری (برای هر دو پنل اعمال می‌شود) ---
+  TAR_ARGS+=(--exclude='*xray-core*' --exclude='*xray-core/*')
+  TAR_ARGS+=(--exclude='*backup*' --exclude='*backup/*')
+  # ----------------------------------------------------
+
   if [ "$PANEL_TYPE" = "pasarguard" ]; then
     say "Creating full backup for PasarGuard (path-preserving)..."
     say "Includes: /opt/pasarguard + /var/lib/pasarguard"
-    [ -d /opt/pasarguard ] && TAR_ARGS+=(opt/pasarguard)
-    [ -d /var/lib/pasarguard ] && TAR_ARGS+=(var/lib/pasarguard)
+    [ -d /opt/pasarguard ] && TAR_ARGS+=(/opt/pasarguard)
+    [ -d /var/lib/pasarguard ] && TAR_ARGS+=(/var/lib/pasarguard)
     if [ "$PG_HAS_NODE" = "true" ]; then
       say "Includes Node: /opt/pg-node + /var/lib/pg-node"
-      [ -d /opt/pg-node ] && TAR_ARGS+=(opt/pg-node)
-      [ -d /var/lib/pg-node ] && TAR_ARGS+=(var/lib/pg-node)
+      [ -d /opt/pg-node ] && TAR_ARGS+=(/opt/pg-node)
+      [ -d /var/lib/pg-node ] && TAR_ARGS+=(/var/lib/pg-node)
     fi
-else
+  else
     say "Creating full backup for PasarGuard/Marzban (path-preserving)..."
     say "Includes: /opt/marzban  +  /var/lib/marzban  +  /var/lib/pg-node"
-    warn "Excluding: xray-core and backups"
-    
-    # قانون حذف بر اساس نام پوشه (مستقل از اینکه مسیر چطور نوشته شده باشد)
-    TAR_ARGS+=(--exclude='*xray-core*' --exclude='*xray-core/*')
-    TAR_ARGS+=(--exclude='*backup*' --exclude='*backup/*')
-
-    # پوشه‌هایی که باید در بک‌آپ قرار بگیرند (تغییر به آدرس از روت اصلی سرور)
     [ -d /opt/marzban ] && TAR_ARGS+=(/opt/marzban)
     [ -d /var/lib/marzban ] && TAR_ARGS+=(/var/lib/marzban)
     [ -d /var/lib/pg-node ] && TAR_ARGS+=(/var/lib/pg-node)
